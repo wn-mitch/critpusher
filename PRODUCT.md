@@ -10,7 +10,17 @@ Players trying a physical coin-pusher toy in desktop and mobile browsers. Pointe
 
 ## Product Purpose
 
-Test the rhythm of dropping, watching, anticipating, and collecting a dense physical pile. The first deliverable is a playable machine with measured density limits and a tuning record. Combat follows only after the physical toy has been evaluated; the eventual direction is a shared pile of player and enemy coins.
+Test the rhythm of dropping, watching, anticipating, and collecting a dense physical pile. A playable machine with measured density limits and a tuning record now exists; combat is the next stage, built on the shared pile of player and enemy coins.
+
+## Roadmap
+
+- **MVP 1 (shipped):** physical machine, dense pile, moving pusher, collection edge, opening rain, live tuning, measurement harness.
+- **MVP 1.5 (shipped):** synchronized player and enemy chute stacks, faction colors, ally/enemy catch counters, release timing controls.
+- **MVP 2 (design open):** combat, deciding what a caught coin does to the player or the enemy.
+- **MVP 3:** progression, escalating pressure, persistence.
+
+`DESIGN.md` holds the design bible and the open combat questions;
+`TUNING.md` holds the measured record.
 
 ## Brand Personality
 

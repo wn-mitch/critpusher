@@ -43,7 +43,8 @@ physical motion.
 ## What is measured
 
 `TUNING.md` is the tuning record: protocol, baselines, held-out results, and
-the commands that produced them. Headless release trials use the real
+the commands that produced them. `DESIGN.md` is the design bible: pillars,
+factions, current status, roadmap, and the open combat questions. Headless release trials use the real
 simulation, one pusher cycle per release, an identical no-input world as a
 control, and payout provenance separated into starting pile, player-fed, and
 enemy-fed coins.
