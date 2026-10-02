@@ -3,15 +3,15 @@ import { createChuteLayout, DEFAULT_CHUTES } from "../src/chutes";
 import { createDropSequence } from "../src/feedback/drop-sequence";
 import { createSimulation } from "../src/simulation";
 
-describe("timed synchronized release sequences", () => {
-  it("releases the requested physical batches at exact intervals and applies delay across held-input sequences", async () => {
+describe("coin-by-coin drop sets", () => {
+  it("releases N single coins per chute at exact intervals without a trailing set delay", async () => {
     const simulation = await createSimulation({ density: 0 });
     const sequence = createDropSequence();
     const layout = createChuteLayout(DEFAULT_CHUTES, simulation.tuning, 0);
     let tick = 0;
     const releasedAt: number[] = [];
     const release = () => {
-      if (!simulation.releaseChutes(layout)) return false;
+      if (!simulation.releaseChutes(layout, 0)) return false;
       releasedAt.push(tick);
       return true;
     };
@@ -19,27 +19,55 @@ describe("timed synchronized release sequences", () => {
       expect(sequence.start(3, 30, tick, release)).toBe(true);
       expect(sequence.start(2, 6, tick, release)).toBe(false);
       expect(sequence.advance(tick, release)).toBe(false);
-      for (tick = 1; tick < 90; tick++) {
+      for (tick = 1; tick < 75; tick++) {
         simulation.step();
         sequence.advance(tick, release);
       }
       expect(releasedAt).toEqual([0, 30, 60]);
       expect(sequence.remaining).toBe(0);
-      expect(simulation.stats().spawned).toBe(27);
+      expect(simulation.stats().spawned).toBe(9);
       expect(
         [...simulation.coins.values()].filter(
           (coin) => coin.faction === "enemy",
         ),
-      ).toHaveLength(18);
-      expect(sequence.start(1, 30, 89, release)).toBe(false);
-      simulation.step();
+      ).toHaveLength(6);
+      expect(
+        [...simulation.coins.values()].filter(
+          (coin) => coin.faction === "ally",
+        ),
+      ).toHaveLength(3);
       expect(sequence.start(1, 30, tick, release)).toBe(true);
-      expect(releasedAt).toEqual([0, 30, 60, 90]);
-      expect(simulation.stats().spawned).toBe(36);
+      expect(releasedAt).toEqual([0, 30, 60, 75]);
+      expect(simulation.stats().spawned).toBe(12);
     } finally {
       simulation.dispose();
     }
   });
+
+  it.each([0, 4])(
+    "releases the maximum click budget with %i enemy chutes",
+    async (enemyChutes) => {
+      const simulation = await createSimulation({ density: 0 });
+      const sequence = createDropSequence();
+      const layout = createChuteLayout(
+        { ...DEFAULT_CHUTES, enemyChutes },
+        simulation.tuning,
+        0,
+      );
+      const release = () => simulation.releaseChutes(layout, 0) !== null;
+      try {
+        expect(sequence.start(30, 30, 0, release)).toBe(true);
+        for (let tick = 1; tick <= 29 * 30; tick++) {
+          simulation.step();
+          sequence.advance(tick, release);
+        }
+        expect(sequence.remaining).toBe(0);
+        expect(simulation.stats().spawned).toBe(30 * (enemyChutes + 1));
+      } finally {
+        simulation.dispose();
+      }
+    },
+  );
 
   it("never emits catch-up batches together after a delayed advance", async () => {
     const simulation = await createSimulation({ density: 0 });
@@ -52,13 +80,13 @@ describe("timed synchronized release sequences", () => {
       expect(sequence.advance(300, release)).toBe(true);
       expect(sequence.advance(300, release)).toBe(false);
       expect(sequence.remaining).toBe(1);
-      expect(simulation.stats().spawned).toBe(18);
+      expect(simulation.stats().spawned).toBe(6);
       for (let step = 0; step < 29; step++) simulation.step();
       expect(sequence.advance(329, release)).toBe(false);
       simulation.step();
       expect(sequence.advance(330, release)).toBe(true);
       expect(sequence.remaining).toBe(0);
-      expect(simulation.stats().spawned).toBe(27);
+      expect(simulation.stats().spawned).toBe(9);
     } finally {
       simulation.dispose();
     }
@@ -76,9 +104,9 @@ describe("timed synchronized release sequences", () => {
         simulation.step();
         expect(sequence.advance(tick, release)).toBe(false);
       }
-      expect(simulation.stats().spawned).toBe(9);
+      expect(simulation.stats().spawned).toBe(3);
       expect(sequence.start(1, 30, 120, release)).toBe(true);
-      expect(simulation.stats().spawned).toBe(18);
+      expect(simulation.stats().spawned).toBe(6);
     } finally {
       simulation.dispose();
     }
@@ -100,9 +128,9 @@ describe("timed synchronized release sequences", () => {
         simulation.step();
         expect(sequence.advance(tick, release)).toBe(false);
       }
-      expect(simulation.stats().spawned).toBe(9);
+      expect(simulation.stats().spawned).toBe(3);
       expect(sequence.start(1, 30, 90, release)).toBe(true);
-      expect(simulation.stats().spawned).toBe(18);
+      expect(simulation.stats().spawned).toBe(6);
     } finally {
       simulation.dispose();
     }

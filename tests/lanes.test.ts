@@ -42,6 +42,7 @@ function simulationFixture(initialCoins: CoinView[] = []): {
     collected: 0,
     allyCollected: 0,
     enemyCollected: 0,
+    dudCollected: 0,
     lost: 0,
     pendingRain: 0,
     physicsMs: 0,

@@ -7,7 +7,7 @@ function tuning(patch: Partial<Tuning> = {}): Tuning {
   return { ...DEFAULT_TUNING, ...patch };
 }
 
-function geometry(plan: RainDrop[]): RainDrop[] {
+function geometry(plan: RainDrop[]): Omit<RainDrop, "faction">[] {
   return plan.map((drop) => ({
     releaseTick: drop.releaseTick,
     pose: {

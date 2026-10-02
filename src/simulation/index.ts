@@ -108,17 +108,20 @@ class PusherSimulation implements Simulation {
 
   releaseChutes(
     chutes: readonly { x: number; count: number; faction?: CoinFaction }[],
+    minimumIntervalTicks = Math.ceil(FIXED_HZ / this.tuning.dropRate),
   ): number[] | null {
     if (
       this.disposed ||
       this.tuning.dropRate <= 0 ||
+      !Number.isInteger(minimumIntervalTicks) ||
+      minimumIntervalTicks < 0 ||
       chutes.length === 0 ||
       chutes.length > 5
     )
       return null;
 
-    const intervalTicks = Math.ceil(FIXED_HZ / this.tuning.dropRate);
-    if (this.simulationTick - this.lastDropTick < intervalTicks) return null;
+    if (this.simulationTick - this.lastDropTick < minimumIntervalTicks)
+      return null;
 
     const poses: Array<RainPose & { faction: CoinFaction }> = [];
     for (const chute of chutes) {
@@ -129,7 +132,8 @@ class PusherSimulation implements Simulation {
         chute.count > 3 ||
         (chute.faction !== undefined &&
           chute.faction !== "ally" &&
-          chute.faction !== "enemy")
+          chute.faction !== "enemy" &&
+          chute.faction !== "dud")
       )
         return null;
 
@@ -224,6 +228,7 @@ class PusherSimulation implements Simulation {
       collected: this.lifecycle.collected,
       allyCollected: this.lifecycle.allyCollected,
       enemyCollected: this.lifecycle.enemyCollected,
+      dudCollected: this.lifecycle.dudCollected,
       lost: this.lifecycle.lost,
       pendingRain: this.pendingRain,
       physicsMs: this.lastPhysicsMs,
@@ -261,7 +266,7 @@ class PusherSimulation implements Simulation {
         !this.isSpawnClear(drop.pose)
       )
         continue;
-      if (!this.spawnCoin(drop.pose)) continue;
+      if (!this.spawnCoin(drop.pose, drop.faction)) continue;
 
       this.rain[index] = undefined;
       this.pendingRain -= 1;
@@ -333,12 +338,13 @@ class PusherSimulation implements Simulation {
     };
   }
 
-  private spawnCoin(pose: RainPose): boolean {
+  private spawnCoin(pose: RainPose, faction: CoinFaction = "ally"): boolean {
     const coin = this.lifecycle.spawn(
       pose,
       pose.rotation,
       this.tuning.radius,
       this.tuning.thickness,
+      faction,
     );
     const added = this.world.addCylinder(coin.id, coin);
     if (!added) this.lifecycle.lose(coin.id);

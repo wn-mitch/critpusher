@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { CoinView, Simulation } from "../contracts";
+import type { CoinFaction, CoinView, Simulation } from "../contracts";
 
 export interface CoinRenderer {
   update(simulation: Simulation): void;
@@ -31,12 +31,26 @@ const TARGET_COLORS = [
   new THREE.Color(0xff49c8),
 ] as const;
 
-const ALLY_BODY = new THREE.Color(0xb67b32);
-const ALLY_FACE = new THREE.Color(0xe1b763);
-const ALLY_STAMP = new THREE.Color(0xf0d487);
-const ENEMY_BODY = new THREE.Color(0xb94a3b);
-const ENEMY_FACE = new THREE.Color(0xe06a45);
-const ENEMY_STAMP = new THREE.Color(0xf08a5b);
+const FACTION_COLORS: Record<
+  CoinFaction,
+  { body: THREE.Color; face: THREE.Color; stamp: THREE.Color }
+> = {
+  ally: {
+    body: new THREE.Color(0xb67b32),
+    face: new THREE.Color(0xe1b763),
+    stamp: new THREE.Color(0xf0d487),
+  },
+  enemy: {
+    body: new THREE.Color(0xb94a3b),
+    face: new THREE.Color(0xe06a45),
+    stamp: new THREE.Color(0xf08a5b),
+  },
+  dud: {
+    body: new THREE.Color(0x62676b),
+    face: new THREE.Color(0x92999e),
+    stamp: new THREE.Color(0xbfc5c9),
+  },
+};
 
 export function createCoinRenderer(root: THREE.Object3D): CoinRenderer {
   const bodyGeometry = new THREE.CylinderGeometry(1, 1, 1, 32);
@@ -196,14 +210,14 @@ export function createCoinRenderer(root: THREE.Object3D): CoinRenderer {
       scale.set(coin.radius, coin.thickness, coin.radius);
       bodyMatrix.compose(position, quaternion, scale);
       body.setMatrixAt(index, bodyMatrix);
-      const enemy = coin.faction === "enemy";
-      body.setColorAt(index, enemy ? ENEMY_BODY : ALLY_BODY);
-      rim.setColorAt(index * 2, enemy ? ENEMY_FACE : ALLY_FACE);
-      rim.setColorAt(index * 2 + 1, enemy ? ENEMY_FACE : ALLY_FACE);
-      hub.setColorAt(index * 2, enemy ? ENEMY_FACE : ALLY_FACE);
-      hub.setColorAt(index * 2 + 1, enemy ? ENEMY_FACE : ALLY_FACE);
+      const colors = FACTION_COLORS[coin.faction];
+      body.setColorAt(index, colors.body);
+      rim.setColorAt(index * 2, colors.face);
+      rim.setColorAt(index * 2 + 1, colors.face);
+      hub.setColorAt(index * 2, colors.face);
+      hub.setColorAt(index * 2 + 1, colors.face);
       for (let detail = 0; detail < 4; detail += 1) {
-        stamp.setColorAt(index * 4 + detail, enemy ? ENEMY_STAMP : ALLY_STAMP);
+        stamp.setColorAt(index * 4 + detail, colors.stamp);
       }
 
       normal.set(0, 1, 0).applyQuaternion(quaternion);

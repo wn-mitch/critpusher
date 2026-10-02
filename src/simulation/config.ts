@@ -6,6 +6,8 @@ export const PLAYER_DROP_Z = -3.15;
 export const DEFAULT_TUNING: Tuning = Object.freeze({
   seed: 1337,
   density: 300,
+  openingEnemyPercent: 40,
+  openingDudPercent: 20,
   radius: 0.32,
   thickness: 0.13,
   coinWeight: 1,
@@ -22,6 +24,8 @@ type NumericKey = keyof Tuning;
 const LIMITS: Record<NumericKey, readonly [number, number]> = {
   seed: [-2_147_483_648, 2_147_483_647],
   density: [0, 1000],
+  openingEnemyPercent: [0, 100],
+  openingDudPercent: [0, 100],
   radius: [0.05, 0.75],
   thickness: [0.02, 0.4],
   coinWeight: [0.1, 10],
@@ -60,10 +64,33 @@ export function sanitizeTuning(base: Tuning, patch?: Partial<Tuning>): Tuning {
     DEFAULT_TUNING.density,
     true,
   );
+  const openingEnemyPercent = bounded(
+    "openingEnemyPercent",
+    changes.openingEnemyPercent,
+    bounded(
+      "openingEnemyPercent",
+      source.openingEnemyPercent,
+      DEFAULT_TUNING.openingEnemyPercent,
+    ),
+  );
+  const openingDudPercent = Math.min(
+    100 - openingEnemyPercent,
+    bounded(
+      "openingDudPercent",
+      changes.openingDudPercent,
+      bounded(
+        "openingDudPercent",
+        source.openingDudPercent,
+        DEFAULT_TUNING.openingDudPercent,
+      ),
+    ),
+  );
 
   return {
     seed: bounded("seed", changes.seed, seed, true),
     density: bounded("density", changes.density, density, true),
+    openingEnemyPercent,
+    openingDudPercent,
     radius: bounded(
       "radius",
       changes.radius,

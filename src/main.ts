@@ -75,6 +75,7 @@ let chuteX = 0;
 let chuteSettings: ChuteSettings = { ...DEFAULT_CHUTES };
 let chuteLayout = createChuteLayout(chuteSettings, DEFAULT_TUNING, chuteX);
 let releaseLayout = chuteLayout.slice().sort((a, b) => a.x - b.x);
+let activeReleaseLayout = releaseLayout;
 const dropSequence = createDropSequence();
 let userPaused = false;
 let hidden = document.hidden;
@@ -255,11 +256,8 @@ function setAimFromPointer(clientX: number, clientY: number): void {
 function drop(x = chuteX): boolean {
   if (!simulation || isPaused() || dropSequence.remaining > 0) return false;
   const tick = Math.round(simulationClock / FIXED_STEP_SECONDS);
-  if (!dropSequence.canStart(tick)) {
-    ui.setRhythm("Waiting for drop interval", false);
-    return false;
-  }
   if (x !== chuteX) syncChutes(x);
+  activeReleaseLayout = releaseLayout;
   return dropSequence.start(
     chuteSettings.dropsPerAction,
     Math.ceil(chuteSettings.dropDelay / FIXED_STEP_SECONDS),
@@ -270,12 +268,12 @@ function drop(x = chuteX): boolean {
 
 function releaseSingle(): boolean {
   if (!simulation || isPaused()) return false;
-  const accepted = simulation.releaseChutes(releaseLayout) !== null;
+  const accepted = simulation.releaseChutes(activeReleaseLayout, 0) !== null;
   if (accepted) {
-    const total = chuteSettings.playerStack + chuteSettings.enemyChutes * 3;
+    const total = activeReleaseLayout.length;
     const queued = dropSequence.remaining - 1;
     ui.setRhythm(
-      `${total} coins released${queued > 0 ? `; ${queued} drops queued` : ""}`,
+      `${total} coins released${queued > 0 ? `; ${queued} coins per chute queued` : ""}`,
       true,
     );
     if (audio.armed) audio.release();

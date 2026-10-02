@@ -2,9 +2,15 @@ import type { ChuteSettings } from "../chutes";
 import type { SimulationStats, Tuning } from "../contracts";
 
 export type LiveTuningKey =
-  "coinWeight" | "friction" | "stroke" | "period" | "dropHeight" | "dropRate";
+  "coinWeight" | "friction" | "stroke" | "period" | "dropHeight";
 export type ResetTuningKey =
-  "seed" | "density" | "radius" | "thickness" | "shelfFront";
+  | "seed"
+  | "density"
+  | "radius"
+  | "thickness"
+  | "shelfFront"
+  | "openingEnemyPercent"
+  | "openingDudPercent";
 export type TuningKey = LiveTuningKey | ResetTuningKey;
 export type TuningPatch = Partial<Tuning>;
 
@@ -18,6 +24,7 @@ export interface AppUiElements {
   collected: HTMLElement;
   allyCollected: HTMLElement;
   enemyCollected: HTMLElement;
+  dudCollected: HTMLElement;
   active: HTMLElement;
   feedback: HTMLElement;
   loading: HTMLElement;
@@ -77,7 +84,11 @@ export interface AppUi {
   updateStats(
     stats: Pick<
       SimulationStats,
-      "active" | "collected" | "allyCollected" | "enemyCollected"
+      | "active"
+      | "collected"
+      | "allyCollected"
+      | "enemyCollected"
+      | "dudCollected"
     >,
   ): void;
   updateMetrics(stats: SimulationStats, metrics?: MetricsSnapshot): void;

@@ -113,6 +113,33 @@ describe("atomic physical chute releases", () => {
     expect(simulation.releaseChutes([{ x: 0, count: 3 }])).toEqual([1, 2, 3]);
   });
 
+  it("allows scheduler-owned cadence without bypassing shape checks or explicit intervals", async () => {
+    const simulation = await simulationWith({ dropRate: 1 });
+    expect(simulation.releaseChutes([{ x: -2, count: 1 }])).toEqual([1]);
+    expect(simulation.releaseChutes([{ x: 0, count: 1 }])).toBeNull();
+    expect(simulation.releaseChutes([{ x: 0, count: 1 }], 0)).toEqual([2]);
+    expect(simulation.releaseChutes([{ x: 0, count: 1 }], 0)).toBeNull();
+    expect(simulation.releaseChutes([{ x: 2, count: 1 }], 2)).toBeNull();
+    advance(simulation, 1);
+    expect(simulation.releaseChutes([{ x: 2, count: 1 }], 2)).toBeNull();
+    advance(simulation, 1);
+    expect(simulation.releaseChutes([{ x: 2, count: 1 }], 2)).toEqual([3]);
+    expectConserved(simulation);
+  });
+
+  it("rejects invalid intervals and preserves disabled dropping with a zero override", async () => {
+    const simulation = await simulationWith();
+    for (const interval of [-1, 0.5, NaN, Infinity]) {
+      expect(
+        simulation.releaseChutes([{ x: 0, count: 1 }], interval),
+      ).toBeNull();
+    }
+    expect(simulation.releaseChutes([{ x: 0, count: 1 }], 0)).toEqual([1]);
+    simulation.configure({ dropRate: 0 });
+    expect(simulation.releaseChutes([{ x: 2, count: 1 }], 0)).toBeNull();
+    expect(simulation.stats().spawned).toBe(1);
+  });
+
   it("spawns three independent flanking stacks and keeps them finite and conserved", async () => {
     const simulation = await simulationWith({ dropRate: 30 });
     const chutes = [

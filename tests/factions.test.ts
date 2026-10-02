@@ -28,7 +28,6 @@ describe("playable chute factions", () => {
                   ...DEFAULT_CHUTES,
                   enemyChutes,
                   chuteSpacing,
-                  playerStack: 3,
                 },
                 simulation.tuning,
               );
@@ -40,16 +39,14 @@ describe("playable chute factions", () => {
               const ids = simulation.releaseChutes(layout);
               expect(ids).not.toBeNull();
               expect(layout).toHaveLength(enemyChutes + 1);
-              expect(ids).toHaveLength(3 + enemyChutes * 3);
+              expect(ids).toHaveLength(enemyChutes + 1);
               expect(layout[0]!.faction).toBe("ally");
               for (let index = 0; index < layout.length; index++) {
                 const chute = layout[index]!;
-                for (const id of ids!.slice(index * 3, index * 3 + 3)) {
-                  expect(simulation.coins.get(id)).toMatchObject({
-                    faction: index === 0 ? "ally" : "enemy",
-                    position: { x: chute.x },
-                  });
-                }
+                expect(simulation.coins.get(ids![index]!)).toMatchObject({
+                  faction: index === 0 ? "ally" : "enemy",
+                  position: { x: chute.x },
+                });
                 expect(Math.abs(chute.x) + radius).toBeLessThan(5);
                 for (const other of layout.slice(index + 1)) {
                   expect(Math.abs(chute.x - other.x)).toBeGreaterThan(
@@ -71,14 +68,14 @@ describe("playable chute factions", () => {
 
   it("keeps asymmetric odd-count offsets and spacing when aim reaches a wall", () => {
     const layout = createChuteLayout(
-      { ...DEFAULT_CHUTES, enemyChutes: 3, chuteSpacing: 1.5, playerStack: 1 },
+      { ...DEFAULT_CHUTES, enemyChutes: 3, chuteSpacing: 1.5 },
       DEFAULT_TUNING,
       -9,
     );
     expect(layout.map((chute) => chute.x - layout[0]!.x)).toEqual([
       0, -1.5, 1.5, -3,
     ]);
-    expect(layout.map((chute) => chute.count)).toEqual([1, 3, 3, 3]);
+    expect(layout.map((chute) => chute.count)).toEqual([1, 1, 1, 1]);
     expect(layout[0]!.x).toBeCloseTo(-1.4);
   });
 
@@ -86,10 +83,14 @@ describe("playable chute factions", () => {
     await RAPIER.init();
     const world = new RapierWorld(DEFAULT_TUNING);
     const lifecycle = new CoinLifecycle();
-    const factions: CoinFaction[] = ["ally", "enemy", "enemy"];
+    const factions: CoinFaction[] = ["ally", "enemy", "enemy", "dud", "dud"];
     const coins = factions.map((faction, index) =>
       lifecycle.spawn(
-        { x: index - 1, y: index === 2 ? -1 : 0.2, z: index === 2 ? 3 : 4.5 },
+        {
+          x: index - 2,
+          y: index === 2 || index === 4 ? -1 : 0.2,
+          z: index === 2 || index === 4 ? 3 : 4.5,
+        },
         { x: 0, y: 0, z: 0, w: 1 },
         0.32,
         0.13,
@@ -115,27 +116,33 @@ describe("playable chute factions", () => {
       }
       expect(lifecycle.stats()).toEqual({
         active: 0,
-        spawned: 3,
-        collected: 2,
+        spawned: 5,
+        collected: 3,
         allyCollected: 1,
         enemyCollected: 1,
-        lost: 1,
+        dudCollected: 1,
+        lost: 2,
       });
       expect(
         events
           .filter((event) => event.kind === "collected")
           .map((event) => event.faction)
           .sort(),
-      ).toEqual(["ally", "enemy"]);
-      expect(events.find((event) => event.kind === "lost")!.faction).toBe(
-        "enemy",
-      );
+      ).toEqual(["ally", "dud", "enemy"]);
+      expect(
+        events
+          .filter((event) => event.kind === "lost")
+          .map((event) => event.faction)
+          .sort(),
+      ).toEqual(["dud", "enemy"]);
       for (const coin of coins) {
         expect(lifecycle.collect(coin.id)).toBe(false);
         expect(lifecycle.lose(coin.id)).toBe(false);
       }
       expect(
-        lifecycle.stats().allyCollected + lifecycle.stats().enemyCollected,
+        lifecycle.stats().allyCollected +
+          lifecycle.stats().enemyCollected +
+          lifecycle.stats().dudCollected,
       ).toBe(lifecycle.stats().collected);
       expect(lifecycle.drainEvents()).toEqual([]);
       lifecycle.reset();
@@ -145,6 +152,7 @@ describe("playable chute factions", () => {
         collected: 0,
         allyCollected: 0,
         enemyCollected: 0,
+        dudCollected: 0,
         lost: 0,
       });
       expect(

@@ -1,4 +1,5 @@
-import type { Tuning } from "../contracts";
+import type { CoinFaction, Tuning } from "../contracts";
+import { DEFAULT_TUNING } from "./config";
 
 export interface RainPose {
   x: number;
@@ -8,6 +9,7 @@ export interface RainPose {
 }
 
 export interface RainDrop {
+  faction: CoinFaction;
   pose: RainPose;
   releaseTick: number;
 }
@@ -268,6 +270,7 @@ export function planRain(tuning: Tuning): RainDrop[] {
 
     for (const position of upperPositions) {
       drops.push({
+        faction: "ally",
         pose: {
           x: position.x,
           y: dropHeight + 0.04 + random() * 0.28,
@@ -279,6 +282,7 @@ export function planRain(tuning: Tuning): RainDrop[] {
     }
     for (const position of lowerPositions) {
       drops.push({
+        faction: "ally",
         pose: {
           x: position.x,
           y: dropHeight + 0.04 + random() * 0.28,
@@ -288,6 +292,34 @@ export function planRain(tuning: Tuning): RainDrop[] {
         releaseTick,
       });
     }
+  }
+
+  const enemyPercent = bounded(
+    tuning.openingEnemyPercent,
+    0,
+    100,
+    DEFAULT_TUNING.openingEnemyPercent,
+  );
+  const dudPercent = Math.min(
+    100 - enemyPercent,
+    bounded(tuning.openingDudPercent, 0, 100, DEFAULT_TUNING.openingDudPercent),
+  );
+  const enemyCount = Math.round((drops.length * enemyPercent) / 100);
+  const dudCount = Math.min(
+    drops.length - enemyCount,
+    Math.round((drops.length * dudPercent) / 100),
+  );
+  for (let index = 0; index < enemyCount + dudCount; index += 1) {
+    drops[index]!.faction = index < enemyCount ? "enemy" : "dud";
+  }
+
+  // A separate stream shuffles factions without changing seeded rain geometry.
+  const factionRandom = randomFactory(tuning.seed ^ 0x4f1bbcdc);
+  for (let index = drops.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(factionRandom() * (index + 1));
+    const faction = drops[index]!.faction;
+    drops[index]!.faction = drops[swapIndex]!.faction;
+    drops[swapIndex]!.faction = faction;
   }
 
   return drops;

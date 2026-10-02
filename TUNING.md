@@ -13,9 +13,9 @@ and R resets when focus is outside form controls. The camera is fixed.
 Sound arms on the first gesture. Mute and volume are independent of reduced
 motion, which suppresses payout particles without changing physical motion.
 
-Tuning separates live coin weight, friction, stroke, period, drop height, and
-drop rate from seed, density, radius, thickness, and collection-edge depth,
-which require **Reseed pile**.
+Tuning separates live coin weight, friction, stroke, period, and drop height
+from seed, density, radius, thickness, collection-edge depth, and opening
+enemy/dud percentages, which require **Reseed pile**.
 Pending reseed values survive live-setting edits. Restart preserves tuning.
 Live sliders apply immediately; exact numeric entries apply on change (blur)
 so partial decimal input is not rewritten by range clamping.
@@ -25,38 +25,46 @@ interval or override a manual pause.
 
 ## Playable release controls (MVP 1.5)
 
-The machine opens with one gold player chute flanked by two red enemy
-chutes. **Drop coin** (or Space) releases every chute at once as a vertical
-stack: your stack plus three red coins from each enemy chute. Enemy coins
-stay red in the pile; starting-pile and player-dropped coins are gold. The
-HUD separates **Ally caught** from **Enemy caught**; `Collected` is their
-sum, and losses never count as catches.
+The machine has one gold player chute and, by default, two red enemy chutes.
+One click requests a **drop set**: the selected number of single coins from
+each chute. Every round releases one coin from each chute simultaneously.
+**Delay between coins (s)** is the interval between coins within this set,
+not a delay between sets. The first round is immediate; the default is
+three coins per chute, 0.3 s apart (nine coins over three rounds).
 
-**Release chutes** tuning is live and needs no reseed:
+**Release chutes** settings apply to the next click without reseeding:
 
 - **Enemy chutes** 0-4. Odd counts add the extra chute on the left.
-- **Chute spacing** is bounded so every chute plus a coin radius stays inside
-  x=-4.4..4.4. Spacing also limits the aiming range, so the whole layout
-  stays in the cabinet instead of clamping flank chutes together.
-- **Player stack** 1-3. Enemy chutes always release three coins.
-- **Delay between drops (s)** 0.1-5 and **Number of drops** 1-30 schedule a
-  sequence from one click. The first release is immediate; later releases
-  fire on fixed simulation ticks, so a paused, hidden, or stalled frame
-  never produces catch-up batches. A click during a sequence is refused
-  until it finishes; pause, reseed, hiding the page, or a refused physical
-  admission stops the remaining drops instead of retrying with fewer coins.
+- **Chute spacing** keeps every chute plus a coin radius inside the cabinet.
+  It also narrows aim so flank chutes are not clamped together.
+- **Delay between coins (s)** 0.1-5.
+- **Coins per chute per click** 1-30. With E enemy chutes and N selected
+  coins, a complete set releases N × (E + 1) bodies.
 
-One scripted browser session (seed 1337, 300 opening coins, four enemy
-chutes, spacing 2.2, player stack 1, one drop per click) confirmed the
-atomic admission and faction split: 13 bodies spawned at the requested
-offsets, 12 counted as enemy, one as ally, and an immediate second click was
-refused by the shared drop cooldown.
+Aim, layout, number, and interval are captured per click. A new click during
+a set is refused. Fixed simulation ticks prevent catch-up bursts after
+stalls. Pause, reset, hiding the page, or blocked physical admission stops
+the remaining coins. There is no additional delay before the next set.
+Admission includes newly inserted colliders that Rapier has not yet indexed.
 
-A separate release trial measured caught coins by source: 30 synchronized
-actions caught 381 ally coins and 57 enemy coins, with 28 of 30 actions
-paying within one pusher cycle. Ally caught includes 361 starting-pile coins
-and 20 player-fed coins, so these totals describe where caught coins came
-from, not damage or combat rewards.
+Opening rain defaults to 40% ally (gold), 40% enemy (red), 20% dud (gray).
+**Opening enemy coins (%)** and **Opening dud coins (%)** apply on reseed;
+ally is the remainder. Enemy takes precedence when percentages exceed 100.
+Rounded quotas are seed-shuffled independently of the rain geometry.
+Duds behave as normal physical bodies but count for neither side.
+`Collected = Ally caught + Enemy caught + Duds caught`; losses count in none.
+
+Browser smoke proof: N=3, two enemy chutes, delay 0.5 s released three bodies
+at times 0, 0.5, and 1.0 s, totaling three ally and six enemy coins. Editing
+controls mid-set did not change the pending set; the next set began at
+1.383 s. A 100-coin opening mix at 30% enemy and 10% dud produced exactly
+60 ally, 30 enemy, and 10 dud coins after reseed. Passing one of each through
+the physical catch boundary added one to each counter and three to total.
+
+The following command is the historical simultaneous-stack trial. Its
+all-ally opening pile yielded 381 ally catches (361 starting-pile, 20
+player-fed), 57 enemy catches, and 28 paying windows out of 30 actions.
+It is not a timed-set or mixed-pile playtest.
 
 ```sh
 just solve --policies center --patterns flanks --coins 3 --enemy-coins 3 \
@@ -66,10 +74,12 @@ just solve --policies center --patterns flanks --coins 3 --enemy-coins 3 \
 
 ## Current physical defaults
 
-300 starting coins, seed 1337, radius 0.32, thickness 0.13, friction 0.58,
-pusher stroke 2, collection edge z=4, period 2.4 seconds, drop height 3.5,
-maximum six drops per simulation second. Rapier steps at 60 Hz. Coin faces
-are flat cylinders; embossed rendering adds only 0.008 total thickness.
+300 starting coins, seed 1337, 40% ally / 40% enemy / 20% dud, radius 0.32,
+thickness 0.13, friction 0.58, pusher stroke 2, collection edge z=4,
+period 2.4 seconds, drop height 3.5. Rapier steps at 60 Hz. Browser cadence
+comes from delay between coins; headless stack trials retain their own
+drop-rate limit (six releases per second by default). Coin faces are flat
+cylinders; embossed rendering adds only 0.008 total thickness.
 
 **Coin weight (×)** is a live mass multiplier from 0.1 to 10, default 1.
 It scales cylinder material density, so mass still depends on coin size.
@@ -783,13 +793,8 @@ input budgets, and matched initial piles hold throughout. Peak active
 count across the full round is 912. All 540 measured Jev decisions choose
 zero additional wait.
 
-The production build and 88 tests pass. Real CLI smoke runs exercise
-simultaneous dense releases at every tested spacing and load, and live
-Jev decisions use the actual narrowed chute coordinates. The playable
-machine now defaults to the matching-stack layout (two enemy chutes,
-three coins per chute, spacing 1.5) and exposes live chute, timing, and
-stack controls with separate ally/enemy catch counters. Human feel,
-browser frame rate for this new setup, long-session behavior, and combat
-balance are not verified. The physical test round is complete; no further
-tuning sweep is required before evaluating this setup with actual combat
-effects.
+These trials measure simultaneous stack releases, not the browser's
+coin-by-coin drop sets or mixed opening pile. The browser exposes those
+controls with separate ally, enemy, and dud catch counters. Human feel,
+real-phone frame rate, long-session behavior, and combat balance are not
+verified. The physical test round provides a baseline for combat design.

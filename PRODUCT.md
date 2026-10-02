@@ -15,7 +15,7 @@ Test the rhythm of dropping, watching, anticipating, and collecting a dense phys
 ## Roadmap
 
 - **MVP 1 (shipped):** physical machine, dense pile, moving pusher, collection edge, opening rain, live tuning, measurement harness.
-- **MVP 1.5 (shipped):** synchronized player and enemy chute stacks, faction colors, ally/enemy catch counters, release timing controls.
+- **MVP 1.5 (shipped):** coin-by-coin player/enemy drop sets, configurable ally/enemy/dud opening mix, distinct colors, separate catch counters.
 - **MVP 2 (design open):** combat, deciding what a caught coin does to the player or the enemy.
 - **MVP 3:** progression, escalating pressure, persistence.
 

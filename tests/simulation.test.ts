@@ -328,6 +328,7 @@ describe("physical simulation lifecycle", () => {
       collected: 1,
       allyCollected: 1,
       enemyCollected: 0,
+      dudCollected: 0,
       lost: 1,
     });
 
@@ -343,6 +344,7 @@ describe("physical simulation lifecycle", () => {
       collected: 1,
       allyCollected: 1,
       enemyCollected: 0,
+      dudCollected: 0,
       lost: 1,
     });
 
@@ -424,6 +426,7 @@ describe("physical simulation lifecycle", () => {
       collected: 0,
       allyCollected: 0,
       enemyCollected: 0,
+      dudCollected: 0,
       lost: 1,
     });
     expect(lifecycle.stats().spawned).toBe(
@@ -440,6 +443,7 @@ describe("physical simulation lifecycle", () => {
       collected: 0,
       allyCollected: 0,
       enemyCollected: 0,
+      dudCollected: 0,
       lost: 0,
     });
     const nextCoin = lifecycle.spawn(

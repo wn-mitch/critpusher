@@ -38,6 +38,8 @@ export class RapierWorld {
 
   private readonly fixedColliders: RAPIER.Collider[] = [];
   private readonly coins = new Map<number, CoinRecord>();
+  // Rapier's broad phase includes new colliders only after the next step.
+  private readonly unsteppedCoinIds: number[] = [];
   private pusherBody: RAPIER.RigidBody | null;
   private pusherCollider: RAPIER.Collider | null;
   private pusherPositionZ = PUSHER_REAR_Z;
@@ -138,6 +140,7 @@ export class RapierWorld {
       .setDensity(this.coinWeight);
     const collider = this.world.createCollider(colliderDesc, body);
     this.coins.set(id, { body, collider });
+    this.unsteppedCoinIds.push(id);
     return true;
   }
 
@@ -174,6 +177,20 @@ export class RapierWorld {
 
       const rotation = normalizeRotation(pose.rotation);
       if (this.world.intersectionWithShape(pose, rotation, shape)) return false;
+      for (const id of this.unsteppedCoinIds) {
+        const coin = this.coins.get(id);
+        if (
+          coin &&
+          shape.intersectsShape(
+            pose,
+            rotation,
+            coin.collider.shape,
+            coin.collider.translation(),
+            coin.collider.rotation(),
+          )
+        )
+          return false;
+      }
 
       for (const other of checked) {
         if (
@@ -195,7 +212,9 @@ export class RapierWorld {
 
   /** Advance exactly one configured Rapier timestep. */
   step(): void {
-    if (!this.disposed) this.world.step();
+    if (this.disposed) return;
+    this.world.step();
+    this.unsteppedCoinIds.length = 0;
   }
 
   /** Apply the contract's cosine pusher motion before the next step. */
@@ -265,6 +284,7 @@ export class RapierWorld {
     if (this.disposed) return;
     this.disposed = true;
     this.coins.clear();
+    this.unsteppedCoinIds.length = 0;
     this.fixedColliders.length = 0;
     this.pusherBody = null;
     this.pusherCollider = null;

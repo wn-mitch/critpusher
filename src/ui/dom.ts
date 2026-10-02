@@ -1,6 +1,6 @@
 import { createChuteControls } from "./chutes";
 import type { SimulationStats, Tuning } from "../contracts";
-import { DEFAULT_TUNING } from "../simulation/config";
+import { DEFAULT_TUNING, sanitizeTuning } from "../simulation/config";
 import { renderMetrics } from "./metrics";
 import type {
   AppUi,
@@ -19,7 +19,6 @@ const LIVE_KEYS: readonly LiveTuningKey[] = [
   "stroke",
   "period",
   "dropHeight",
-  "dropRate",
 ];
 const RESET_KEYS: readonly ResetTuningKey[] = [
   "seed",
@@ -27,6 +26,8 @@ const RESET_KEYS: readonly ResetTuningKey[] = [
   "radius",
   "thickness",
   "shelfFront",
+  "openingEnemyPercent",
+  "openingDudPercent",
 ];
 const FIELD_LABELS: Record<TuningKey, string> = {
   seed: "Seed",
@@ -39,7 +40,8 @@ const FIELD_LABELS: Record<TuningKey, string> = {
   stroke: "Pusher stroke",
   period: "Pusher period",
   dropHeight: "Drop height",
-  dropRate: "Drop rate",
+  openingEnemyPercent: "Opening enemy coins (%)",
+  openingDudPercent: "Opening dud coins (%)",
 };
 const FIELD_LIMITS: Record<
   TuningKey,
@@ -55,7 +57,8 @@ const FIELD_LIMITS: Record<
   stroke: { min: 0.4, max: 2, step: 0.01 },
   period: { min: 0.75, max: 5, step: 0.01 },
   dropHeight: { min: 1.5, max: 6, step: 0.01 },
-  dropRate: { min: 1, max: 12, step: 0.1 },
+  openingEnemyPercent: { min: 0, max: 100, step: 1 },
+  openingDudPercent: { min: 0, max: 100, step: 1 },
 };
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -181,7 +184,7 @@ export function createAppUi(
   options: AppUiOptions = {},
 ): AppUi {
   const callbacks: AppUiCallbacks = options.callbacks ?? {};
-  const tuning: Tuning = toTuning(options.initialTuning ?? {}, DEFAULT_TUNING);
+  const tuning = sanitizeTuning(DEFAULT_TUNING, options.initialTuning);
   const cleanup: Array<() => void> = [];
   root.replaceChildren();
   root.className = "app-shell";
@@ -231,6 +234,11 @@ export function createAppUi(
   enemyCollected.textContent = "0";
   const enemyLabel = element("span", "hud-stat");
   enemyLabel.append("Enemy caught ", enemyCollected);
+  const dudCollected = element("span");
+  dudCollected.id = "dud-collected";
+  dudCollected.textContent = "0";
+  const dudLabel = element("span", "hud-stat");
+  dudLabel.append("Duds caught ", dudCollected);
   const active = element("span");
   active.id = "active";
   active.textContent = "0";
@@ -241,7 +249,14 @@ export function createAppUi(
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
   feedback.setAttribute("aria-atomic", "true");
-  hud.append(collectedLabel, allyLabel, enemyLabel, activeLabel, feedback);
+  hud.append(
+    collectedLabel,
+    allyLabel,
+    enemyLabel,
+    dudLabel,
+    activeLabel,
+    feedback,
+  );
   const loading = element("div", "loading-state");
   loading.id = "loading";
   loading.setAttribute("role", "status");
@@ -307,7 +322,12 @@ export function createAppUi(
   const resetGroup = element("fieldset", "tuning-group");
   const resetLegend = element("legend");
   resetLegend.textContent = "Reset-required tuning";
-  resetGroup.append(resetLegend);
+  const resetHelp = element("p", "chute-help");
+  const updateOpeningMixHelp = (): void => {
+    resetHelp.textContent = `On reseed: ${100 - tuning.openingEnemyPercent - tuning.openingDudPercent}% ally, ${tuning.openingEnemyPercent}% enemy, ${tuning.openingDudPercent}% duds. Gray duds count for neither side.`;
+  };
+  updateOpeningMixHelp();
+  resetGroup.append(resetLegend, resetHelp);
   const ranges = {} as Record<TuningKey, HTMLInputElement>;
   const numbers = {} as Record<TuningKey, HTMLInputElement>;
   for (const key of LIVE_KEYS)
@@ -375,6 +395,7 @@ export function createAppUi(
     collected,
     allyCollected,
     enemyCollected,
+    dudCollected,
     active,
     feedback,
     loading,
@@ -394,26 +415,42 @@ export function createAppUi(
     densityPresets,
   };
 
-  const emitTuning = (key: TuningKey): void => {
-    const next = readNumber(numbers[key], tuning[key]);
-    tuning[key] = next;
-    setInputValue(ranges[key], next);
-    const patch = { [key]: next } as Partial<Tuning>;
-    if (LIVE_KEYS.includes(key as LiveTuningKey))
-      callbacks.onLiveTuningChange?.(patch);
-    else callbacks.onResetTuningChange?.(patch);
+  const syncTuningControls = (): void => {
+    for (const key of [...LIVE_KEYS, ...RESET_KEYS]) {
+      const next = tuning[key];
+      setInputValue(ranges[key], next);
+      setInputValue(numbers[key], next);
+      const readout = document.getElementById(`${key}-value`);
+      if (readout) readout.textContent = formatNumber(next);
+    }
+    updateOpeningMixHelp();
   };
-  const syncTuning = (key: TuningKey): void => {
+  const sanitizeTuningField = (key: TuningKey): void => {
     const next = readNumber(numbers[key], tuning[key]);
-    tuning[key] = next;
-    setInputValue(ranges[key], next);
+    Object.assign(tuning, sanitizeTuning(tuning, { [key]: next }));
+    syncTuningControls();
+  };
+  const emitTuning = (key: TuningKey): void => {
+    sanitizeTuningField(key);
+    if (LIVE_KEYS.includes(key as LiveTuningKey)) {
+      callbacks.onLiveTuningChange?.({ [key]: tuning[key] });
+      return;
+    }
+    const patch =
+      key === "openingEnemyPercent" || key === "openingDudPercent"
+        ? {
+            openingEnemyPercent: tuning.openingEnemyPercent,
+            openingDudPercent: tuning.openingDudPercent,
+          }
+        : { [key]: tuning[key] };
+    callbacks.onResetTuningChange?.(patch);
   };
   for (const key of [...LIVE_KEYS, ...RESET_KEYS]) {
     const number = numbers[key];
     const range = ranges[key];
     const live = LIVE_KEYS.includes(key as LiveTuningKey);
     const onInput = (): void => {
-      syncTuning(key);
+      sanitizeTuningField(key);
       if (live) emitTuning(key);
     };
     const onChange = (): void => emitTuning(key);
@@ -480,14 +517,8 @@ export function createAppUi(
   }
 
   function setTuning(next: Partial<Tuning>): void {
-    Object.assign(tuning, next);
-    for (const key of [...LIVE_KEYS, ...RESET_KEYS]) {
-      const value = tuning[key];
-      setInputValue(ranges[key], value);
-      setInputValue(numbers[key], value);
-      const readout = document.getElementById(`${key}-value`);
-      if (readout) readout.textContent = formatNumber(value);
-    }
+    Object.assign(tuning, sanitizeTuning(tuning, next));
+    syncTuningControls();
   }
   function setLoading(
     isLoading: boolean,
@@ -523,13 +554,18 @@ export function createAppUi(
   function updateStats(
     stats: Pick<
       SimulationStats,
-      "active" | "collected" | "allyCollected" | "enemyCollected"
+      | "active"
+      | "collected"
+      | "allyCollected"
+      | "enemyCollected"
+      | "dudCollected"
     >,
   ): void {
     active.textContent = String(stats.active);
     collected.textContent = String(stats.collected);
     allyCollected.textContent = String(stats.allyCollected);
     enemyCollected.textContent = String(stats.enemyCollected);
+    dudCollected.textContent = String(stats.dudCollected);
   }
   function updateMetrics(
     stats: SimulationStats,
@@ -554,7 +590,6 @@ export function createAppUi(
       stroke: tuning.stroke,
       period: tuning.period,
       dropHeight: tuning.dropHeight,
-      dropRate: tuning.dropRate,
     }),
     getResetTuning: () => ({
       seed: tuning.seed,
@@ -562,6 +597,8 @@ export function createAppUi(
       radius: tuning.radius,
       thickness: tuning.thickness,
       shelfFront: tuning.shelfFront,
+      openingEnemyPercent: tuning.openingEnemyPercent,
+      openingDudPercent: tuning.openingDudPercent,
     }),
     getChuteSettings: chuteControls.get,
     setChuteSettings: chuteControls.set,

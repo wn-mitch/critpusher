@@ -13,6 +13,8 @@ export interface Quaternion {
 export interface Tuning {
   seed: number;
   density: number;
+  openingEnemyPercent: number;
+  openingDudPercent: number;
   radius: number;
   thickness: number;
   shelfFront: number;
@@ -23,7 +25,7 @@ export interface Tuning {
   dropHeight: number;
   dropRate: number;
 }
-export type CoinFaction = "ally" | "enemy";
+export type CoinFaction = "ally" | "enemy" | "dud";
 export interface CoinView {
   id: number;
   faction: CoinFaction;
@@ -46,6 +48,7 @@ export interface SimulationStats {
   collected: number;
   allyCollected: number;
   enemyCollected: number;
+  dudCollected: number;
   lost: number;
   pendingRain: number;
   physicsMs: number;
@@ -60,9 +63,11 @@ export interface Simulation {
   /**
    * Atomically release one to five vertical chute stacks of one to three coins.
    * Returned ids follow input chute order, then bottom-to-top order.
+   * A nonnegative integer minimumIntervalTicks overrides the drop-rate cooldown.
    */
   releaseChutes(
     chutes: readonly { x: number; count: number; faction?: CoinFaction }[],
+    minimumIntervalTicks?: number,
   ): number[] | null;
   reset(tuning?: Partial<Tuning>): void;
   configure(tuning: Partial<Tuning>): void;

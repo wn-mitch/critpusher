@@ -3,7 +3,6 @@ import type { CoinFaction, Tuning } from "./contracts";
 export interface ChuteSettings {
   enemyChutes: number;
   chuteSpacing: number;
-  playerStack: number;
   dropDelay: number;
   dropsPerAction: number;
 }
@@ -17,11 +16,9 @@ export interface ChuteDrop {
 export const DEFAULT_CHUTES: Readonly<ChuteSettings> = Object.freeze({
   enemyChutes: 2,
   chuteSpacing: 1.5,
-  playerStack: 3,
-  dropDelay: 2.4,
-  dropsPerAction: 1,
+  dropDelay: 0.3,
+  dropsPerAction: 3,
 });
-export const ENEMY_STACK = 3;
 
 function bounded(
   value: number,
@@ -57,9 +54,6 @@ export function sanitizeChutes(
       limits.max,
       DEFAULT_CHUTES.chuteSpacing,
     ),
-    playerStack: Math.round(
-      bounded(settings.playerStack, 1, 3, DEFAULT_CHUTES.playerStack),
-    ),
     dropDelay: bounded(settings.dropDelay, 0.1, 5, DEFAULT_CHUTES.dropDelay),
     dropsPerAction: Math.round(
       bounded(settings.dropsPerAction, 1, 30, DEFAULT_CHUTES.dropsPerAction),
@@ -92,10 +86,10 @@ export function createChuteLayout(
     0,
   );
   return [
-    { x: center, count: safe.playerStack, faction: "ally" },
+    { x: center, count: 1, faction: "ally" },
     ...offsets.map((offset): ChuteDrop => ({
       x: center + offset,
-      count: ENEMY_STACK,
+      count: 1,
       faction: "enemy",
     })),
   ];

@@ -12,6 +12,7 @@ export interface LifecycleStats {
   collected: number;
   allyCollected: number;
   enemyCollected: number;
+  dudCollected: number;
   lost: number;
 }
 
@@ -23,6 +24,7 @@ export class CoinLifecycle {
   private collectedCount = 0;
   private allyCollectedCount = 0;
   private enemyCollectedCount = 0;
+  private dudCollectedCount = 0;
   private lostCount = 0;
 
   get coins(): ReadonlyMap<number, CoinView> {
@@ -49,6 +51,10 @@ export class CoinLifecycle {
     return this.enemyCollectedCount;
   }
 
+  get dudCollected(): number {
+    return this.dudCollectedCount;
+  }
+
   get lost(): number {
     return this.lostCount;
   }
@@ -60,6 +66,7 @@ export class CoinLifecycle {
     this.collectedCount = 0;
     this.allyCollectedCount = 0;
     this.enemyCollectedCount = 0;
+    this.dudCollectedCount = 0;
     this.lostCount = 0;
   }
 
@@ -124,6 +131,7 @@ export class CoinLifecycle {
       collected: this.collectedCount,
       allyCollected: this.allyCollectedCount,
       enemyCollected: this.enemyCollectedCount,
+      dudCollected: this.dudCollectedCount,
       lost: this.lostCount,
     };
   }
@@ -140,6 +148,7 @@ export class CoinLifecycle {
     if (kind === "collected") {
       this.collectedCount += 1;
       if (coin.faction === "enemy") this.enemyCollectedCount += 1;
+      else if (coin.faction === "dud") this.dudCollectedCount += 1;
       else this.allyCollectedCount += 1;
     } else this.lostCount += 1;
     this.events.push({

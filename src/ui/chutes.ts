@@ -1,6 +1,5 @@
 import {
   DEFAULT_CHUTES,
-  ENEMY_STACK,
   chuteSpacingLimits,
   sanitizeChutes,
   type ChuteSettings,
@@ -24,17 +23,9 @@ const FIELDS = [
     step: 0.01,
   },
   {
-    key: "playerStack",
-    id: "player-stack",
-    label: "Player stack",
-    min: 1,
-    max: 3,
-    step: 1,
-  },
-  {
     key: "dropDelay",
     id: "drop-delay",
-    label: "Delay between drops (s)",
+    label: "Delay between coins (s)",
     min: 0.1,
     max: 5,
     step: 0.1,
@@ -42,7 +33,7 @@ const FIELDS = [
   {
     key: "dropsPerAction",
     id: "drops-per-action",
-    label: "Number of drops",
+    label: "Coins per chute per click",
     min: 1,
     max: 30,
     step: 1,
@@ -61,7 +52,8 @@ export function createChuteControls(
   legend.textContent = "Release chutes";
   const help = document.createElement("p");
   help.className = "chute-help";
-  help.textContent = `Enemy chutes drop ${ENEMY_STACK} red coins with each gold player stack. Chute changes apply immediately; delay and drop count apply to the next click. Pause or reset cancels queued drops. Spacing limits aim; odd counts add the extra chute on the left.`;
+  help.textContent =
+    "One click releases one set: each chute releases the chosen number of coins, one at a time at the selected interval. Aim and release settings are captured per click. Pause or reset cancels queued coins. Spacing limits aim; odd enemy-chute counts add the extra chute on the left.";
   group.append(legend, help);
   const controls = FIELDS.map((field) => {
     const wrapper = document.createElement("div");
@@ -109,8 +101,7 @@ export function createChuteControls(
       input.value = String(settings[field.key]);
       output.textContent = String(Math.round(settings[field.key] * 100) / 100);
     }
-    const perDrop = settings.playerStack + settings.enemyChutes * ENEMY_STACK;
-    total.textContent = `${perDrop} coins per drop; ${perDrop * settings.dropsPerAction} coins per click.`;
+    total.textContent = `${settings.dropsPerAction} coins per chute; ${settings.dropsPerAction * (settings.enemyChutes + 1)} coins per click.`;
   }
 
   set(settings, radius);
