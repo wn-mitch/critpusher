@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { createChuteLayout, DEFAULT_CHUTES } from "../src/chutes";
+import {
+  createChuteLayout,
+  DEFAULT_CHUTES,
+  sanitizeChutes,
+} from "../src/chutes";
 import { createDropSequence } from "../src/feedback/drop-sequence";
 import { createSimulation } from "../src/simulation";
+import { FIXED_DT } from "../src/simulation/config";
 
 describe("coin-by-coin drop sets", () => {
-  it("releases N single coins per chute at exact intervals without a trailing set delay", async () => {
+  it("honors fractional-second coin delays without a trailing set delay", async () => {
     const simulation = await createSimulation({ density: 0 });
     const sequence = createDropSequence();
-    const layout = createChuteLayout(DEFAULT_CHUTES, simulation.tuning, 0);
+    const settings = sanitizeChutes(
+      { ...DEFAULT_CHUTES, dropDelay: 0.23 },
+      simulation.tuning,
+    );
+    const intervalTicks = Math.ceil(settings.dropDelay / FIXED_DT);
+    const layout = createChuteLayout(settings, simulation.tuning, 0);
     let tick = 0;
     const releasedAt: number[] = [];
     const release = () => {
@@ -16,14 +26,14 @@ describe("coin-by-coin drop sets", () => {
       return true;
     };
     try {
-      expect(sequence.start(3, 30, tick, release)).toBe(true);
+      expect(sequence.start(3, intervalTicks, tick, release)).toBe(true);
       expect(sequence.start(2, 6, tick, release)).toBe(false);
       expect(sequence.advance(tick, release)).toBe(false);
-      for (tick = 1; tick < 75; tick++) {
+      for (tick = 1; tick < 40; tick++) {
         simulation.step();
         sequence.advance(tick, release);
       }
-      expect(releasedAt).toEqual([0, 30, 60]);
+      expect(releasedAt).toEqual([0, 14, 28]);
       expect(sequence.remaining).toBe(0);
       expect(simulation.stats().spawned).toBe(9);
       expect(
@@ -36,8 +46,8 @@ describe("coin-by-coin drop sets", () => {
           (coin) => coin.faction === "ally",
         ),
       ).toHaveLength(3);
-      expect(sequence.start(1, 30, tick, release)).toBe(true);
-      expect(releasedAt).toEqual([0, 30, 60, 75]);
+      expect(sequence.start(1, intervalTicks, tick, release)).toBe(true);
+      expect(releasedAt).toEqual([0, 14, 28, 40]);
       expect(simulation.stats().spawned).toBe(12);
     } finally {
       simulation.dispose();

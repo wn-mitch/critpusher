@@ -27,8 +27,8 @@ const FIELDS = [
     id: "drop-delay",
     label: "Delay between coins (s)",
     min: 0.1,
-    max: 5,
-    step: 0.1,
+    max: 0.5,
+    step: 0.01,
   },
   {
     key: "dropsPerAction",

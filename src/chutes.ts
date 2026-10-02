@@ -54,7 +54,7 @@ export function sanitizeChutes(
       limits.max,
       DEFAULT_CHUTES.chuteSpacing,
     ),
-    dropDelay: bounded(settings.dropDelay, 0.1, 5, DEFAULT_CHUTES.dropDelay),
+    dropDelay: bounded(settings.dropDelay, 0.1, 0.5, DEFAULT_CHUTES.dropDelay),
     dropsPerAction: Math.round(
       bounded(settings.dropsPerAction, 1, 30, DEFAULT_CHUTES.dropsPerAction),
     ),

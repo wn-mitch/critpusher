@@ -71,10 +71,11 @@ legible enemy chutes, and a shared adversarial pile.
   Space, tap, or hold.
 - Live physical tuning: coin weight, friction, stroke, period, drop height.
 - Next-click release settings: enemy chute count (0-4), chute spacing,
-  delay between coins (0.1-5 s), coins per chute per click (1-30).
+  delay between coins (0.10-0.50 s in 0.01 s steps), coins per chute per click (1-30).
   Defaults: two enemy chutes, spacing 1.5, three coins per chute, delay 0.3 s.
   Aim, layout, count, and delay are captured at the click; edits cannot
   change the size or placement of a set already running.
+  Physical release times round up to the next 60 Hz simulation tick (about 17 ms).
 - Reseed-required: seed, density, coin radius, coin thickness, collection
   edge depth, opening enemy percentage, opening dud percentage.
 - Chute spacing bounds keep every chute plus a coin radius inside the

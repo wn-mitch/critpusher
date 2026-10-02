@@ -37,7 +37,9 @@ three coins per chute, 0.3 s apart (nine coins over three rounds).
 - **Enemy chutes** 0-4. Odd counts add the extra chute on the left.
 - **Chute spacing** keeps every chute plus a coin radius inside the cabinet.
   It also narrows aim so flank chutes are not clamped together.
-- **Delay between coins (s)** 0.1-5.
+- **Delay between coins (s)** 0.10-0.50 in 0.01 s steps. Actual intervals
+  round up to the next 60 Hz simulation tick (about 17 ms); 0.23 s releases
+  at 0, 0.2333, and 0.4667 s for a three-coin set.
 - **Coins per chute per click** 1-30. With E enemy chutes and N selected
   coins, a complete set releases N × (E + 1) bodies.
 
