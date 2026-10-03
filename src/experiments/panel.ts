@@ -1,4 +1,4 @@
-import type { CollectionEvent, Presentation, Simulation } from "../contracts";
+import type { CoinEvent, Presentation, Simulation } from "../contracts";
 import { selectTargets } from "./targets";
 
 export interface PlacementProbeOptions {
@@ -9,7 +9,7 @@ export interface PlacementProbeOptions {
 }
 
 export interface PlacementProbe {
-  collect(events: readonly CollectionEvent[]): void;
+  collect(events: readonly CoinEvent[]): void;
   reset(): void;
   dispose(): void;
 }
@@ -126,7 +126,7 @@ export function createPlacementProbe({
   updateReadout();
 
   return {
-    collect(events: readonly CollectionEvent[]): void {
+    collect(events: readonly CoinEvent[]): void {
       if (disposed) return;
       let changed = false;
       for (const event of events) {

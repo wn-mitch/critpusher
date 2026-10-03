@@ -1,12 +1,14 @@
-/** One click schedules single-coin rounds; its delay never gates the next set. */
+/** One click schedules rounds; a busy mechanical feeder waits without consuming a round. */
 export function createDropSequence() {
   let remaining = 0;
   let nextTick = 0;
   let intervalTicks = 1;
 
-  function advance(tick: number, release: () => boolean): boolean {
+  function advance(tick: number, release: () => boolean | "waiting"): boolean {
     if (remaining === 0 || tick < nextTick) return false;
-    if (!release()) {
+    const result = release();
+    if (result === "waiting") return false;
+    if (!result) {
       remaining = 0;
       return false;
     }
@@ -23,13 +25,13 @@ export function createDropSequence() {
       count: number,
       delayTicks: number,
       tick: number,
-      release: () => boolean,
+      release: () => boolean | "waiting",
     ): boolean {
       if (remaining !== 0) return false;
       remaining = count;
       intervalTicks = delayTicks;
       nextTick = tick;
-      return advance(tick, release);
+      return advance(tick, release) || remaining > 0;
     },
     advance,
     cancel() {

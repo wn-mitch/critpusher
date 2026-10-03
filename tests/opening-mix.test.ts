@@ -1,29 +1,30 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { CoinFaction, Simulation, Tuning } from "../src/contracts";
+import { COIN_TYPES, type CoinType, type Simulation, type Tuning } from "../src/contracts";
+import { DEFAULT_ENCOUNTER_CONFIG, GOLD_ONLY_MIX, simulationConfig } from "../src/combat/config";
+import type { CoinMix, SimulationConfig } from "../src/combat/types";
 import { createSimulation, DEFAULT_TUNING } from "../src/simulation";
-import { sanitizeTuning } from "../src/simulation/config";
 import { planRain } from "../src/simulation/rain";
 
 const simulations: Simulation[] = [];
+const equalMix: CoinMix = { gold: 1, diamond: 1, sword: 1, skull: 1, potion: 1, bomb: 1 };
 
-async function simulationWith(patch: Partial<Tuning>): Promise<Simulation> {
-  const simulation = await createSimulation(patch);
+async function simulationWith(
+  patch: Partial<Tuning>,
+  config?: Partial<SimulationConfig>,
+): Promise<Simulation> {
+  const simulation = await createSimulation(patch, config);
   simulations.push(simulation);
   return simulation;
 }
 
-function countFactions(coins: Iterable<{ faction: CoinFaction }>) {
-  const counts: Record<CoinFaction, number> = { ally: 0, enemy: 0, dud: 0 };
-  for (const coin of coins) counts[coin.faction] += 1;
+function countTypes(coins: Iterable<{ type: CoinType }>): Record<CoinType, number> {
+  const counts: Record<CoinType, number> = { gold: 0, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0 };
+  for (const coin of coins) counts[coin.type] += 1;
   return counts;
 }
 
 function drainRain(simulation: Simulation): void {
-  for (
-    let step = 0;
-    step < 1_200 && simulation.stats().pendingRain > 0;
-    step++
-  ) {
+  for (let step = 0; step < 1_200 && simulation.stats().pendingRain > 0; step++) {
     simulation.step();
   }
   expect(simulation.stats().pendingRain).toBe(0);
@@ -44,94 +45,40 @@ afterEach(() => {
 
 describe("mixed opening pile", () => {
   it.each([
-    {
-      density: 300,
-      enemy: 40,
-      dud: 20,
-      expected: { ally: 120, enemy: 120, dud: 60 },
-    },
-    {
-      density: 17,
-      enemy: 40,
-      dud: 20,
-      expected: { ally: 7, enemy: 7, dud: 3 },
-    },
-    { density: 3, enemy: 50, dud: 50, expected: { ally: 0, enemy: 2, dud: 1 } },
-    { density: 17, enemy: 0, dud: 0, expected: { ally: 17, enemy: 0, dud: 0 } },
-    {
-      density: 17,
-      enemy: 100,
-      dud: 100,
-      expected: { ally: 0, enemy: 17, dud: 0 },
-    },
-    {
-      density: 17,
-      enemy: -10,
-      dud: 300,
-      expected: { ally: 0, enemy: 0, dud: 17 },
-    },
-    {
-      density: 17,
-      enemy: 33.3,
-      dud: 12.5,
-      expected: { ally: 9, enemy: 6, dud: 2 },
-    },
-    {
-      density: 17,
-      enemy: NaN,
-      dud: Infinity,
-      expected: { ally: 7, enemy: 7, dud: 3 },
-    },
-    { density: 0, enemy: 0, dud: 100, expected: { ally: 0, enemy: 0, dud: 0 } },
-  ])(
-    "bounds rounded quotas for $density coins, $enemy% enemy and $dud% dud",
-    ({ density, enemy, dud, expected }) => {
-      const tuning = sanitizeTuning(DEFAULT_TUNING, {
-        density,
-        openingEnemyPercent: enemy,
-        openingDudPercent: dud,
-      });
-      expect(tuning.openingEnemyPercent).toBeGreaterThanOrEqual(0);
-      expect(tuning.openingDudPercent).toBeGreaterThanOrEqual(0);
-      expect(
-        tuning.openingEnemyPercent + tuning.openingDudPercent,
-      ).toBeLessThanOrEqual(100);
-      expect(countFactions(planRain(tuning))).toEqual(expected);
-    },
-  );
-
-  it("repeats faction and geometry assignments while changing the shuffle with the seed", () => {
-    const tuning = { ...DEFAULT_TUNING, density: 48, seed: 71 };
-    const first = planRain(tuning);
-    const second = planRain(tuning);
-    const differentSeed = planRain({ ...tuning, seed: 72 });
-    const differentMix = planRain({
-      ...tuning,
-      openingEnemyPercent: 0,
-      openingDudPercent: 100,
-    });
-
-    expect(second).toEqual(first);
-    expect(differentSeed.map(({ faction }) => faction)).not.toEqual(
-      first.map(({ faction }) => faction),
-    );
-    expect(differentSeed.map(({ pose }) => pose)).not.toEqual(
-      first.map(({ pose }) => pose),
-    );
-    expect(
-      differentMix.map(({ pose, releaseTick }) => ({ pose, releaseTick })),
-    ).toEqual(first.map(({ pose, releaseTick }) => ({ pose, releaseTick })));
+    { density: 3, mix: equalMix, expected: { gold: 1, diamond: 1, sword: 1, skull: 0, potion: 0, bomb: 0 } },
+    { density: 7, mix: equalMix, expected: { gold: 2, diamond: 1, sword: 1, skull: 1, potion: 1, bomb: 1 } },
+    { density: 17, mix: GOLD_ONLY_MIX, expected: { gold: 17, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0 } },
+    { density: 0, mix: equalMix, expected: { gold: 0, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0 } },
+  ])("allocates exact largest-remainder quotas for $density coins", ({ density, mix, expected }) => {
+    expect(countTypes(planRain({ ...DEFAULT_TUNING, density }, mix))).toEqual(expected);
   });
 
-  it("preserves exact factions through deferred physical rain admissions", async () => {
+  it("normalizes relative weights without changing allocations", () => {
+    const mix = DEFAULT_ENCOUNTER_CONFIG.openingMix;
+    const scaled = Object.fromEntries(COIN_TYPES.map(type => [type, mix[type] * 3])) as CoinMix;
+    expect(planRain(DEFAULT_TUNING, scaled)).toEqual(planRain(DEFAULT_TUNING, mix));
+  });
+
+  it("repeats type and geometry assignments while isolating the mix stream", () => {
+    const tuning = { ...DEFAULT_TUNING, density: 48, seed: 71 };
+    const first = planRain(tuning, DEFAULT_ENCOUNTER_CONFIG.openingMix);
+    const second = planRain(tuning, DEFAULT_ENCOUNTER_CONFIG.openingMix);
+    const differentSeed = planRain({ ...tuning, seed: 72 }, DEFAULT_ENCOUNTER_CONFIG.openingMix);
+    const differentMix = planRain(tuning, GOLD_ONLY_MIX);
+
+    expect(second).toEqual(first);
+    expect(differentSeed.map(({ type }) => type)).not.toEqual(first.map(({ type }) => type));
+    expect(differentSeed.map(({ pose }) => pose)).not.toEqual(first.map(({ pose }) => pose));
+    expect(differentMix.map(({ pose, releaseTick }) => ({ pose, releaseTick }))).toEqual(
+      first.map(({ pose, releaseTick }) => ({ pose, releaseTick })),
+    );
+  });
+
+  it("preserves exact types through deferred physical rain admissions", async () => {
     const simulation = await simulationWith({ density: 300, seed: 13 });
-    const plan = planRain(simulation.tuning);
+    const plan = planRain(simulation.tuning, simulation.config.openingMix);
     let sawDeferredAdmission = false;
-    for (
-      let tick = 0;
-      tick < 1_200 && simulation.stats().pendingRain > 0;
-      tick++
-    ) {
+    for (let tick = 0; tick < 1_200 && simulation.stats().pendingRain > 0; tick++) {
       simulation.step();
       const due = plan.filter(({ releaseTick }) => releaseTick <= tick).length;
       if (simulation.stats().spawned < due) sawDeferredAdmission = true;
@@ -141,102 +88,123 @@ describe("mixed opening pile", () => {
     expect(sawDeferredAdmission).toBe(true);
     expect(stats.pendingRain).toBe(0);
     expect(stats.spawned).toBe(300);
-    expect(
-      countFactions([
-        ...simulation.coins.values(),
-        ...simulation.drainEvents(),
-      ]),
-    ).toEqual({ ally: 120, enemy: 120, dud: 60 });
-    expect(stats.spawned).toBe(stats.active + stats.collected + stats.lost);
-    expect(stats.collected).toBe(
-      stats.allyCollected + stats.enemyCollected + stats.dudCollected,
-    );
+    expect(countTypes([...simulation.coins.values(), ...simulation.drainEvents()])).toEqual(countTypes(plan));
+    expect(stats.spawned).toBe(stats.active + stats.collected + stats.lost + stats.detonated);
+    expect(stats.collected).toBe(Object.values(stats.collectedByType).reduce((sum, count) => sum + count, 0));
+    expect(stats.detonated).toBe(0);
+    expect([...simulation.coins.values()].every(coin => coin.bombHits === 0)).toBe(true);
   });
 
-  it("rebuilds identical physical faction assignments on reset and leaves geometry unchanged by the mix", async () => {
+  it("rebuilds seeded physics on reset without reusing IDs or changing geometry with the mix", async () => {
     const tuning = { density: 48, seed: 71 };
     const first = await simulationWith(tuning);
     const sameSeed = await simulationWith(tuning);
-    const allDuds = await simulationWith({
-      ...tuning,
-      openingEnemyPercent: 0,
-      openingDudPercent: 100,
-    });
+    const allGold = await simulationWith(tuning, { openingMix: GOLD_ONLY_MIX });
     drainRain(first);
     drainRain(sameSeed);
-    drainRain(allDuds);
+    drainRain(allGold);
     const original = snapshot(first);
+    const highestId = Math.max(...first.coins.keys(), ...first.drainEvents().map(event => event.id));
 
     expect(snapshot(sameSeed)).toEqual(original);
-    expect(
-      snapshot(allDuds).map(({ faction: _faction, ...geometry }) => geometry),
-    ).toEqual(original.map(({ faction: _faction, ...geometry }) => geometry));
-    expect(
-      countFactions([...allDuds.coins.values(), ...allDuds.drainEvents()]),
-    ).toEqual({ ally: 0, enemy: 0, dud: 48 });
-    expect(allDuds.stats()).toMatchObject({
-      allyCollected: 0,
-      enemyCollected: 0,
+    expect(snapshot(allGold).map(({ type: _type, ...geometry }) => geometry)).toEqual(
+      original.map(({ type: _type, ...geometry }) => geometry),
+    );
+    expect(countTypes([...allGold.coins.values(), ...allGold.drainEvents()])).toEqual({
+      gold: 48, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0,
     });
-    expect(allDuds.stats().collected).toBe(allDuds.stats().dudCollected);
+    expect(allGold.stats().collected).toBe(allGold.stats().collectedByType.gold);
 
     first.reset();
     drainRain(first);
     expect(snapshot(first)).toEqual(original);
+    expect([...first.coins.keys(), ...first.drainEvents().map(event => event.id)].every(id => id > highestId)).toBe(true);
   });
 
-  it("ignores live mix edits and replaces an in-flight mix only on reset", async () => {
-    const simulation = await simulationWith({ density: 96, seed: 31 });
+  it("retains domain config on reset and replaces whole nested values only when supplied", async () => {
+    const bomb = { hitThreshold: 5, minClosingSpeed: 1, blastRadius: 2, blastDeltaSpeed: 4 };
+    const simulation = await simulationWith({ density: 96, seed: 31 }, { openingMix: GOLD_ONLY_MIX, bomb });
     simulation.step();
-    const before = snapshot(simulation);
-    simulation.configure({ openingEnemyPercent: 0, openingDudPercent: 100 });
-    expect(simulation.tuning).toMatchObject({
-      openingEnemyPercent: 40,
-      openingDudPercent: 20,
-    });
-    expect(snapshot(simulation)).toEqual(before);
-    drainRain(simulation);
-    expect(
-      countFactions([
-        ...simulation.coins.values(),
-        ...simulation.drainEvents(),
-      ]),
-    ).toEqual({ ally: 39, enemy: 38, dud: 19 });
-
-    simulation.reset({ density: 96 });
-    simulation.step();
-    simulation.reset({
-      density: 9,
-      openingEnemyPercent: 0,
-      openingDudPercent: 100,
-    });
-    expect(simulation.stats()).toMatchObject({
-      pendingRain: 9,
-      spawned: 0,
-      collected: 0,
-      allyCollected: 0,
-      enemyCollected: 0,
-      dudCollected: 0,
-      lost: 0,
-    });
+    simulation.configure({ friction: 0.7 });
+    expect(simulation.config).toEqual({ openingMix: GOLD_ONLY_MIX, bomb });
+    simulation.reset({ density: 9 });
+    expect(simulation.config).toEqual({ openingMix: GOLD_ONLY_MIX, bomb });
+    expect(simulation.stats()).toMatchObject({ pendingRain: 9, spawned: 0, collected: 0, lost: 0, detonated: 0 });
+    expect(simulation.stats().collectedByType).toEqual(countTypes([]));
     expect(simulation.drainEvents()).toEqual([]);
     drainRain(simulation);
-    expect(countFactions(simulation.coins.values())).toEqual({
-      ally: 0,
-      enemy: 0,
-      dud: 9,
+    expect(countTypes([...simulation.coins.values(), ...simulation.drainEvents()])).toEqual({
+      gold: 9, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0,
     });
-    expect(simulation.stats().spawned).toBe(9);
+
+    simulation.reset(undefined, { openingMix: equalMix });
+    drainRain(simulation);
+    expect(simulation.config.bomb).toEqual(bomb);
+    expect(countTypes([...simulation.coins.values(), ...simulation.drainEvents()])).toEqual({
+      gold: 2, diamond: 2, sword: 2, skull: 1, potion: 1, bomb: 1,
+    });
   });
 
-  it("accepts dud chute coins without assigning them to either side", async () => {
+  it.each(COIN_TYPES)("admits explicit %s chute types in input/level order", async type => {
     const simulation = await simulationWith({ density: 0 });
-    const ids = simulation.releaseChutes([{ x: 0, count: 3, faction: "dud" }]);
+    const ids = simulation.releaseChutes([{ x: -1, count: 2, type }, { x: 1, count: 1 }]);
     expect(ids).toEqual([1, 2, 3]);
-    expect(countFactions(simulation.coins.values())).toEqual({
-      ally: 0,
-      enemy: 0,
-      dud: 3,
-    });
+    expect(ids!.map(id => simulation.coins.get(id)!.type)).toEqual([type, type, "sword"]);
+    expect(ids!.map(id => simulation.coins.get(id)!.bombHits)).toEqual([0, 0, 0]);
+  });
+
+  it("rejects a malformed explicit type before spawning any part of a round", async () => {
+    const simulation = await simulationWith({ density: 0 });
+    expect(simulation.releaseChutes([
+      { x: -1, count: 1, type: "gold" },
+      { x: 1, count: 1, type: "invalid" as CoinType },
+    ])).toBeNull();
+    expect(simulation.stats()).toMatchObject({ spawned: 0, active: 0, lost: 0 });
+    expect(simulation.drainEvents()).toEqual([]);
+    expect(simulation.releaseChutes([{ x: 0, count: 1 }])).toEqual([1]);
+  });
+});
+
+describe("domain configuration validation", () => {
+  it.each([
+    { gold: 100 },
+    { ...equalMix, gold: -1 },
+    { ...equalMix, gold: NaN },
+    { ...equalMix, gold: Infinity },
+    { gold: 0, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0 },
+    null,
+  ])("rejects malformed whole opening mixes: %j", openingMix => {
+    const patch = { openingMix } as unknown as Partial<SimulationConfig>;
+    expect(() => simulationConfig(undefined, patch)).toThrow();
+    expect(() => planRain({ ...DEFAULT_TUNING, density: 0 }, openingMix as CoinMix)).toThrow();
+  });
+
+  it.each([
+    { hitThreshold: 3 },
+    { ...DEFAULT_ENCOUNTER_CONFIG.bomb, hitThreshold: 0 },
+    { ...DEFAULT_ENCOUNTER_CONFIG.bomb, hitThreshold: 11 },
+    { ...DEFAULT_ENCOUNTER_CONFIG.bomb, hitThreshold: 2.5 },
+    { ...DEFAULT_ENCOUNTER_CONFIG.bomb, minClosingSpeed: NaN },
+    { ...DEFAULT_ENCOUNTER_CONFIG.bomb, blastRadius: 0 },
+    { ...DEFAULT_ENCOUNTER_CONFIG.bomb, blastDeltaSpeed: Infinity },
+    null,
+  ])("rejects malformed whole bomb configs: %j", bomb => {
+    expect(() => simulationConfig(undefined, { bomb } as unknown as Partial<SimulationConfig>)).toThrow();
+  });
+
+  it("rejects invalid construction and preserves the running machine after invalid reset", async () => {
+    const invalid = { openingMix: { gold: 100 } } as Partial<SimulationConfig>;
+    await expect(createSimulation({ density: 0 }, invalid)).rejects.toThrow();
+    const simulation = await simulationWith({ density: 0 });
+    const ids = simulation.releaseChutes([{ x: 0, count: 1, type: "bomb" }]);
+    const before = snapshot(simulation);
+    const config = { openingMix: { ...simulation.config.openingMix }, bomb: { ...simulation.config.bomb } };
+    expect(() => simulation.reset({ density: 100 }, invalid)).toThrow();
+    expect(snapshot(simulation)).toEqual(before);
+    expect(simulation.config).toEqual(config);
+    expect(simulation.tuning.density).toBe(0);
+    expect([...simulation.coins.keys()]).toEqual(ids);
+    simulation.step();
+    expect(simulation.stats()).toMatchObject({ spawned: 1, active: 1, pendingRain: 0 });
   });
 });

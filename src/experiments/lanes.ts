@@ -1,4 +1,5 @@
-import type { CoinView, CollectionEvent, Simulation } from "../contracts";
+import type { CoinEvent, CoinView, Simulation } from "../contracts";
+import { MACHINE_GEOMETRY } from "../machine-geometry";
 import {
   SOLVER_LANE_CENTERS,
   type LaneBoard,
@@ -7,11 +8,18 @@ import {
   type SurfaceCell,
 } from "./solver-contracts";
 
-const LANE_MIN_X = -5;
-const LANE_WIDTH = 2;
-const PUSHER_DECK_Y = 0.6;
-const LOWER_BAND_REAR_Z = -2;
+const LANE_MIN_X = -MACHINE_GEOMETRY.shelfHalfWidth;
+const LANE_WIDTH = MACHINE_GEOMETRY.shelfHalfWidth * 2 / SOLVER_LANE_CENTERS.length;
+const PUSHER_DECK_Y = MACHINE_GEOMETRY.pusherTop;
+const LOWER_BAND_REAR_Z = MACHINE_GEOMETRY.pusherRearZ + MACHINE_GEOMETRY.pusherFrontOffset;
 
+export type SupportClassification =
+  | "upper"
+  | "lowerRear"
+  | "lowerMiddle"
+  | "lowerFront"
+  | "airborne"
+  | "falling";
 interface PositionSample {
   x: number;
   y: number;
@@ -32,9 +40,9 @@ interface LaneAccumulator {
   edgeGap: number | null;
 }
 
-function laneForX(x: number): number | null {
-  if (!Number.isFinite(x) || x < LANE_MIN_X || x > 5) return null;
-  return Math.min(4, Math.floor((x - LANE_MIN_X) / LANE_WIDTH));
+export function laneForX(x: number): number | null {
+  if (!Number.isFinite(x) || x < LANE_MIN_X || x > MACHINE_GEOMETRY.shelfHalfWidth) return null;
+  return Math.min(SOLVER_LANE_CENTERS.length - 1, Math.floor((x - LANE_MIN_X) / LANE_WIDTH));
 }
 
 function emptyCell(): CellAccumulator {
@@ -89,10 +97,28 @@ function addCoin(
   cell.speedSamples += 1;
 }
 
-function lowerBand(z: number, shelfFront: number): 0 | 1 | 2 {
+export function lowerBand(z: number, shelfFront: number): 0 | 1 | 2 {
   const depth = shelfFront - LOWER_BAND_REAR_Z;
   const offset = Math.max(0, z - LOWER_BAND_REAR_Z);
   return Math.min(2, Math.floor(offset / (depth / 3))) as 0 | 1 | 2;
+}
+
+export function supportClassification(
+  coin: Pick<CoinView, "position" | "radius" | "thickness">,
+  pusherFront: number,
+  shelfFront: number,
+): SupportClassification {
+  const { y, z } = coin.position;
+  if (y < MACHINE_GEOMETRY.shelfTop || z > shelfFront) return "falling";
+
+  const upperHeight = y >= PUSHER_DECK_Y - coin.thickness;
+  const onUpper = z <= pusherFront && upperHeight;
+  const supportY = onUpper ? PUSHER_DECK_Y : MACHINE_GEOMETRY.shelfTop;
+  if (y > supportY + 3 * coin.radius) return "airborne";
+  if (onUpper) return "upper";
+  return (["lowerRear", "lowerMiddle", "lowerFront"] as const)[
+    lowerBand(z, shelfFront)
+  ];
 }
 
 /**
@@ -110,7 +136,7 @@ export function createLaneObserver(): LaneObserver {
   const pendingCollected = [0, 0, 0, 0, 0];
 
   return {
-    observe(simulation: Simulation): LaneBoard {
+    observe(simulation: Simulation, visibleIds?: ReadonlySet<number>): LaneBoard {
       const stats = simulation.stats();
       const time = Number.isFinite(stats.time) ? stats.time : 0;
       const period =
@@ -122,7 +148,7 @@ export function createLaneObserver(): LaneObserver {
         ? simulation.tuning.shelfFront
         : 0;
       const pusherFront = Number.isFinite(stats.pusherZ)
-        ? stats.pusherZ + 1
+        ? stats.pusherZ + MACHINE_GEOMETRY.pusherFrontOffset
         : 0;
       const sampleSeconds =
         previousTime !== null && time > previousTime ? time - previousTime : 0;
@@ -133,6 +159,8 @@ export function createLaneObserver(): LaneObserver {
       let falling = 0;
 
       for (const coin of simulation.coins.values()) {
+        if (visibleIds !== undefined && !visibleIds.has(coin.id)) continue;
+
         const isValid = validCoin(coin);
         if (isValid) {
           currentPositions.set(coin.id, {
@@ -148,35 +176,32 @@ export function createLaneObserver(): LaneObserver {
           continue;
         }
         const lane = accumulators[laneIndex]!;
-        const { y, z } = coin.position;
-        if (y < 0 || z > shelfFront) {
+        const support = supportClassification(coin, pusherFront, shelfFront);
+        if (support === "falling") {
           falling += 1;
           continue;
         }
-
-        // Position and height infer the supporting surface; the height ceiling
-        // rejects bodies too far above that support to be an actionable stack.
-        const upperHeight = y >= PUSHER_DECK_Y - coin.thickness;
-        const onUpper = z <= pusherFront && upperHeight;
-        const supportY = onUpper ? PUSHER_DECK_Y : 0;
-        if (y > supportY + 3 * coin.radius) {
+        if (support === "airborne") {
           airborne += 1;
           continue;
         }
 
         active += 1;
         const previous = previousPositions.get(coin.id);
-        if (onUpper) {
+        if (support === "upper") {
           addCoin(lane.upper, coin, previous, sampleSeconds);
           continue;
         }
 
-        const band = lowerBand(z, shelfFront);
+        const band =
+          support === "lowerRear" ? 0 : support === "lowerMiddle" ? 1 : 2;
         addCoin(lane.lower[band], coin, previous, sampleSeconds);
-        const gap = shelfFront - (z + coin.radius);
+        const gap = shelfFront - (coin.position.z + coin.radius);
         lane.edgeGap =
           lane.edgeGap === null ? gap : Math.min(lane.edgeGap, gap);
-        if (shelfFront - z <= 2 * coin.radius) lane.nearEdge += 1;
+        if (shelfFront - coin.position.z <= 2 * coin.radius) {
+          lane.nearEdge += 1;
+        }
       }
 
       const lanes: SolverLane[] = accumulators.map((lane, index) => ({
@@ -209,7 +234,7 @@ export function createLaneObserver(): LaneObserver {
       };
     },
 
-    record(events: readonly CollectionEvent[]): void {
+    record(events: readonly CoinEvent[]): void {
       for (const event of events) {
         if (event.kind !== "collected") continue;
         const lane = laneForX(event.position.x);

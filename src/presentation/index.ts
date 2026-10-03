@@ -1,24 +1,29 @@
 import * as THREE from "three";
-import type { CollectionEvent, Presentation, Simulation } from "../contracts";
+import type { CoinEvent, GizmoView, Presentation, Simulation } from "../contracts";
+import type { CombatStepResult, FeedTray } from "../combat/types";
 import { DEFAULT_TUNING, PLAYER_DROP_Z } from "../simulation/config";
-import type { ChuteDrop } from "../chutes";
+import { MACHINE_GEOMETRY } from "../machine-geometry";
+import { fitMachineCamera } from "./camera";
+import { loadCabinetAsset } from "./cabinet-asset";
 import { createCoinRenderer } from "./coins";
+import { createCoinSymbolResources } from "./coin-symbols";
 import { createCollectionEffects } from "./effects";
-import { createCabinet, updateChuteGuides } from "./scene";
+import { createCabinet, updateFeedTrays } from "./scene";
+import { createCaseStickers } from "./stickers";
 
-const MIN_CHUTE_X = -4.4;
-const MAX_CHUTE_X = 4.4;
+const MIN_CHUTE_X = -MACHINE_GEOMETRY.aimHalfWidth;
+const MAX_CHUTE_X = MACHINE_GEOMETRY.aimHalfWidth;
 
 function clampChute(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(MAX_CHUTE_X, Math.max(MIN_CHUTE_X, value));
 }
 
-export function createPresentation(host: HTMLElement): Presentation {
+export async function createPresentation(host: HTMLElement): Promise<Presentation> {
+  const cabinetAsset = await loadCabinetAsset();
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x211713);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-  const target = new THREE.Vector3(0, 0.45, 0.25);
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     alpha: false,
@@ -44,10 +49,28 @@ export function createPresentation(host: HTMLElement): Presentation {
   scene.add(fillLight);
 
   let shelfFront = DEFAULT_TUNING.shelfFront;
-  let cabinet = createCabinet(shelfFront);
+  let radius = DEFAULT_TUNING.radius;
+  let dropHeight = DEFAULT_TUNING.dropHeight;
+  let thickness = DEFAULT_TUNING.thickness;
+  const symbolResources = createCoinSymbolResources();
+  let cabinet = createCabinet(shelfFront, symbolResources, cabinetAsset);
   scene.add(cabinet.root);
-  const coins = createCoinRenderer(scene);
+  const coins = createCoinRenderer(scene, symbolResources);
   const effects = createCollectionEffects(scene);
+  const stickers = createCaseStickers();
+  stickers.bind(cabinet.root);
+  const bell = cabinetAsset.instantiate("combo_bell");
+  bell.name = "physical-combo-bell";
+  bell.visible = false;
+  const bellBounds = new THREE.Box3().setFromObject(bell);
+  const bellRadius = Math.max(bellBounds.max.x - bellBounds.min.x, bellBounds.max.z - bellBounds.min.z) / 2;
+  scene.add(bell);
+  const updateBell = ({ position, rotation, radius }: GizmoView) => {
+    bell.visible = true;
+    bell.position.set(position.x, position.y, position.z);
+    bell.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+    bell.scale.setScalar(radius / bellRadius);
+  };
   const raycaster = new THREE.Raycaster();
   const chutePlane = new THREE.Plane(
     new THREE.Vector3(0, 0, 1),
@@ -59,52 +82,19 @@ export function createPresentation(host: HTMLElement): Presentation {
     typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(() => resize())
       : null;
-  let dropHeight = DEFAULT_TUNING.dropHeight;
   let disposed = false;
 
   function disposeCabinet(): void {
     scene.remove(cabinet.root);
+    cabinet.stockBodies.dispose();
+    cabinet.stockRims.dispose();
+    for (const symbol of Object.values(cabinet.stockSymbols)) {
+      for (const mesh of symbol.meshes) mesh.dispose();
+    }
     for (const geometry of cabinet.resources.geometries) geometry.dispose();
     for (const material of cabinet.resources.materials) material.dispose();
   }
 
-  function fitCamera(width: number, height: number): void {
-    const aspect = width / Math.max(1, height);
-    const portrait = aspect < 1;
-    camera.aspect = aspect;
-    camera.fov = portrait ? 50 : 42;
-
-    const tangent = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-    const elevation = THREE.MathUtils.degToRad(portrait ? 31 : 29);
-    const elevationSin = Math.sin(elevation);
-    const elevationCos = Math.cos(elevation);
-    const halfWidth = portrait ? 5.35 : 6.15;
-    const padding = 1.04;
-    let distance = 0;
-
-    for (let corner = 0; corner < 4; corner += 1) {
-      const y = (corner & 1) === 0 ? -1.6 : 4.5;
-      const z = (corner & 2) === 0 ? -4.2 : 5.6;
-      const relativeY = y - target.y;
-      const relativeZ = z - target.z;
-      const depthOffset = relativeY * elevationSin + relativeZ * elevationCos;
-      const projectedY = Math.abs(
-        relativeY * elevationCos - relativeZ * elevationSin,
-      );
-      const widthDistance =
-        depthOffset + (halfWidth * padding) / (tangent * aspect);
-      const heightDistance = depthOffset + (projectedY * padding) / tangent;
-      distance = Math.max(distance, widthDistance, heightDistance);
-    }
-
-    camera.position.set(
-      0,
-      target.y + distance * elevationSin,
-      target.z + distance * elevationCos,
-    );
-    camera.lookAt(target);
-    camera.updateProjectionMatrix();
-  }
 
   function resize(): void {
     if (disposed) return;
@@ -118,7 +108,7 @@ export function createPresentation(host: HTMLElement): Presentation {
       Math.floor(bounds.height || host.clientHeight || 1),
     );
     renderer.setSize(width, height, false);
-    fitCamera(width, height);
+    fitMachineCamera(camera, width, height, radius, dropHeight, shelfFront, thickness, cabinetAsset.bounds);
     // Resizing clears the drawing buffer even while the simulation is paused.
     renderer.render(scene, camera);
   }
@@ -141,34 +131,60 @@ export function createPresentation(host: HTMLElement): Presentation {
     simulation: Simulation,
     dt: number,
     reducedMotion: boolean,
-    chutes: readonly ChuteDrop[],
+    trays: readonly FeedTray[],
   ): void {
     if (disposed) return;
+    let cameraChanged = false;
     if (simulation.tuning.shelfFront !== shelfFront) {
       disposeCabinet();
       shelfFront = simulation.tuning.shelfFront;
-      cabinet = createCabinet(shelfFront);
+      cabinet = createCabinet(shelfFront, symbolResources, cabinetAsset);
       scene.add(cabinet.root);
+      stickers.bind(cabinet.root);
+      cameraChanged = true;
     }
-    dropHeight = Number.isFinite(simulation.tuning.dropHeight)
+    const nextRadius = Number.isFinite(simulation.tuning.radius)
+      ? simulation.tuning.radius
+      : DEFAULT_TUNING.radius;
+    const nextDropHeight = Number.isFinite(simulation.tuning.dropHeight)
       ? simulation.tuning.dropHeight
       : DEFAULT_TUNING.dropHeight;
-    updateChuteGuides(
-      cabinet,
-      chutes,
-      simulation.tuning.radius,
-      simulation.tuning.thickness,
-      dropHeight,
-    );
+    const nextThickness = Number.isFinite(simulation.tuning.thickness)
+      ? simulation.tuning.thickness
+      : DEFAULT_TUNING.thickness;
+    cameraChanged = cameraChanged || nextRadius !== radius || nextDropHeight !== dropHeight || nextThickness !== thickness;
+    radius = nextRadius;
+    dropHeight = nextDropHeight;
+    thickness = nextThickness;
+    if (cameraChanged) {
+      const bounds = host.getBoundingClientRect();
+      fitMachineCamera(
+        camera,
+        Math.max(1, Math.floor(bounds.width || host.clientWidth || 1)),
+        Math.max(1, Math.floor(bounds.height || host.clientHeight || 1)),
+        radius,
+        dropHeight,
+        shelfFront,
+        thickness,
+        cabinetAsset.bounds,
+      );
+    }
+    updateFeedTrays(cabinet, trays, radius, thickness, dropHeight);
     cabinet.pusher.position.z = simulation.stats().pusherZ;
     coins.update(simulation);
-    effects.update(dt, reducedMotion);
+    bell.visible = false;
+    simulation.gizmos.forEach(updateBell);
+    effects.update(dt, reducedMotion, shelfFront);
     renderer.render(scene, camera);
   }
 
-  function collect(events: CollectionEvent[], reducedMotion: boolean): void {
+  function collect(
+    events: readonly CoinEvent[],
+    reducedMotion: boolean,
+    combat?: CombatStepResult,
+  ): void {
     if (disposed) return;
-    effects.collect(events, reducedMotion);
+    effects.collect(events, reducedMotion, combat);
   }
 
   resizeObserver?.observe(host);
@@ -182,7 +198,11 @@ export function createPresentation(host: HTMLElement): Presentation {
     if (!resizeObserver) window.removeEventListener("resize", resize);
     coins.dispose();
     effects.dispose();
+    stickers.dispose();
+    scene.remove(bell);
     disposeCabinet();
+    symbolResources.dispose();
+    cabinetAsset.dispose();
     renderer.dispose();
     if (renderer.domElement.parentElement === host)
       host.removeChild(renderer.domElement);
@@ -192,6 +212,8 @@ export function createPresentation(host: HTMLElement): Presentation {
     canvas: renderer.domElement,
     render,
     collect,
+    clearEffects: effects.reset,
+    setStickers: stickers.set,
     markTargets: coins.markTargets,
     pointerToChute,
     resize,

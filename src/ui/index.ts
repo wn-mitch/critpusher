@@ -1,6 +1,8 @@
 export { createAppUi } from "./dom";
+export { createCombatUi } from "./combat";
 export { bindControls, isEditableTarget, HoldRepeat } from "./input";
 export { renderMetrics } from "./metrics";
+export type { CombatUi } from "./combat";
 export type {
   AppUi,
   AppUiCallbacks,

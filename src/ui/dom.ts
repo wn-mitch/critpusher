@@ -1,6 +1,9 @@
 import { createChuteControls } from "./chutes";
+import { createCombatUi } from "./combat";
+import { createRunUi } from "./run";
 import type { SimulationStats, Tuning } from "../contracts";
 import { DEFAULT_TUNING, sanitizeTuning } from "../simulation/config";
+import type { CombatStepResult, EncounterSnapshot, FeedTray } from "../combat/types";
 import { renderMetrics } from "./metrics";
 import type {
   AppUi,
@@ -26,8 +29,6 @@ const RESET_KEYS: readonly ResetTuningKey[] = [
   "radius",
   "thickness",
   "shelfFront",
-  "openingEnemyPercent",
-  "openingDudPercent",
 ];
 const FIELD_LABELS: Record<TuningKey, string> = {
   seed: "Seed",
@@ -40,8 +41,6 @@ const FIELD_LABELS: Record<TuningKey, string> = {
   stroke: "Pusher stroke",
   period: "Pusher period",
   dropHeight: "Drop height",
-  openingEnemyPercent: "Opening enemy coins (%)",
-  openingDudPercent: "Opening dud coins (%)",
 };
 const FIELD_LIMITS: Record<
   TuningKey,
@@ -57,8 +56,6 @@ const FIELD_LIMITS: Record<
   stroke: { min: 0.4, max: 2, step: 0.01 },
   period: { min: 0.75, max: 5, step: 0.01 },
   dropHeight: { min: 1.5, max: 6, step: 0.01 },
-  openingEnemyPercent: { min: 0, max: 100, step: 1 },
-  openingDudPercent: { min: 0, max: 100, step: 1 },
 };
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -195,22 +192,21 @@ export function createAppUi(
   brand.textContent = "CRITPUSHER";
   brand.setAttribute("aria-label", "Critpusher");
   const mode = element("div", "mode-label");
-  mode.textContent = "PHYSICS LAB";
+  mode.textContent = "THREE-FLOOR RUN";
   brandLine.append(brand, mode);
   const toolbar = element("nav", "toolbar");
   toolbar.setAttribute("aria-label", "Machine controls");
   const pause = button("pause", "Pause");
   const sound = button("sound", "Sound ready");
   const tuningToggle = button("tuning-toggle", "Tuning");
-  const restart = button("restart", "Reset");
-  sound.setAttribute("aria-pressed", "false");
-  pause.setAttribute("aria-pressed", "false");
+  const restart = button("restart", "Restart");
   toolbar.append(pause, sound, tuningToggle, restart);
   header.append(brandLine, toolbar);
 
   const main = element("main", "game-layout");
   const stage = element("section", "machine-stage");
   stage.setAttribute("aria-label", "Coin pusher machine");
+  const viewport = element("div", "machine-viewport");
   const scene = element("div");
   scene.id = "scene";
   scene.tabIndex = 0;
@@ -224,21 +220,6 @@ export function createAppUi(
   collected.textContent = "0";
   const collectedLabel = element("span", "hud-stat");
   collectedLabel.append("Collected ", collected);
-  const allyCollected = element("span");
-  allyCollected.id = "ally-collected";
-  allyCollected.textContent = "0";
-  const allyLabel = element("span", "hud-stat");
-  allyLabel.append("Ally caught ", allyCollected);
-  const enemyCollected = element("span");
-  enemyCollected.id = "enemy-collected";
-  enemyCollected.textContent = "0";
-  const enemyLabel = element("span", "hud-stat");
-  enemyLabel.append("Enemy caught ", enemyCollected);
-  const dudCollected = element("span");
-  dudCollected.id = "dud-collected";
-  dudCollected.textContent = "0";
-  const dudLabel = element("span", "hud-stat");
-  dudLabel.append("Duds caught ", dudCollected);
   const active = element("span");
   active.id = "active";
   active.textContent = "0";
@@ -249,19 +230,13 @@ export function createAppUi(
   feedback.setAttribute("role", "status");
   feedback.setAttribute("aria-live", "polite");
   feedback.setAttribute("aria-atomic", "true");
-  hud.append(
-    collectedLabel,
-    allyLabel,
-    enemyLabel,
-    dudLabel,
-    activeLabel,
-    feedback,
-  );
+  hud.append(collectedLabel, activeLabel, feedback);
+  const combatHost = element("div", "combat-host");
   const loading = element("div", "loading-state");
   loading.id = "loading";
   loading.setAttribute("role", "status");
   loading.setAttribute("aria-live", "polite");
-  loading.textContent = "Loading physics lab…";
+  loading.textContent = "Loading cabinet and physics…";
   const error = element("div", "error-state");
   error.id = "error";
   error.setAttribute("role", "alert");
@@ -271,7 +246,8 @@ export function createAppUi(
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   status.textContent = "Ready when the machine is loaded.";
-  stage.append(scene, hud, loading, error, status);
+  viewport.append(scene, hud, loading, error, status);
+  stage.append(viewport);
 
   const footer = element("footer", "play-controls");
   const aimControl = element("div", "aim-control");
@@ -322,12 +298,7 @@ export function createAppUi(
   const resetGroup = element("fieldset", "tuning-group");
   const resetLegend = element("legend");
   resetLegend.textContent = "Reset-required tuning";
-  const resetHelp = element("p", "chute-help");
-  const updateOpeningMixHelp = (): void => {
-    resetHelp.textContent = `On reseed: ${100 - tuning.openingEnemyPercent - tuning.openingDudPercent}% ally, ${tuning.openingEnemyPercent}% enemy, ${tuning.openingDudPercent}% duds. Gray duds count for neither side.`;
-  };
-  updateOpeningMixHelp();
-  resetGroup.append(resetLegend, resetHelp);
+  resetGroup.append(resetLegend);
   const ranges = {} as Record<TuningKey, HTMLInputElement>;
   const numbers = {} as Record<TuningKey, HTMLInputElement>;
   for (const key of LIVE_KEYS)
@@ -349,7 +320,7 @@ export function createAppUi(
     densityPresets.push(preset);
     presetGroup.append(preset);
   }
-  const applyReset = button("apply-reset", "Reseed pile", "primary");
+  const applyReset = button("apply-reset", "Apply tuning & new run", "primary");
   const accessibility = element("div", "accessibility-controls");
   const motionLabel = element("label");
   const reducedMotion = element("input");
@@ -371,6 +342,22 @@ export function createAppUi(
   const metrics = element("section", "metrics");
   metrics.id = "metrics";
   metrics.setAttribute("aria-label", "Machine metrics");
+  const combatUi = createCombatUi(combatHost, () => reducedMotion.checked);
+  const runHost = element("section", "run-panel");
+  runHost.hidden = true;
+  const runUi = createRunUi(runHost, {
+    chooseStarter: (id) => callbacks.onChooseStarter?.(id) ?? false,
+    previewPurchase: (request) => {
+      if (!callbacks.onPreviewPurchase) throw new Error("Run is not ready.");
+      return callbacks.onPreviewPurchase(request);
+    },
+    purchase: (request) => {
+      if (!callbacks.onPurchase) throw new Error("Run is not ready.");
+      return callbacks.onPurchase(request);
+    },
+    continueRun: () => callbacks.onContinueRun?.() ?? false,
+    restart: () => callbacks.onRestart?.(),
+  });
   aside.append(
     tuningHeading,
     chuteGroup,
@@ -382,7 +369,7 @@ export function createAppUi(
     metrics,
   );
 
-  main.append(stage, footer, aside);
+  main.append(combatHost, stage, footer, runHost, combatUi.legend, aside);
   root.append(header, main);
 
   const elements: AppUiElements = {
@@ -393,9 +380,6 @@ export function createAppUi(
     restart,
     scene,
     collected,
-    allyCollected,
-    enemyCollected,
-    dudCollected,
     active,
     feedback,
     loading,
@@ -410,6 +394,14 @@ export function createAppUi(
     reducedMotion,
     volume,
     metrics,
+    playerHp: combatUi.playerHp,
+    playerHpBar: combatUi.playerHpBar,
+    enemyHp: combatUi.enemyHp,
+    enemyHpBar: combatUi.enemyHpBar,
+    enemyRoster: combatUi.enemyRoster,
+    currency: combatUi.currency,
+    lifecycle: combatUi.lifecycle,
+    combatCues: combatUi.combatCues,
     tuningInputs: ranges,
     tuningNumbers: numbers,
     densityPresets,
@@ -423,7 +415,6 @@ export function createAppUi(
       const readout = document.getElementById(`${key}-value`);
       if (readout) readout.textContent = formatNumber(next);
     }
-    updateOpeningMixHelp();
   };
   const sanitizeTuningField = (key: TuningKey): void => {
     const next = readNumber(numbers[key], tuning[key]);
@@ -436,14 +427,7 @@ export function createAppUi(
       callbacks.onLiveTuningChange?.({ [key]: tuning[key] });
       return;
     }
-    const patch =
-      key === "openingEnemyPercent" || key === "openingDudPercent"
-        ? {
-            openingEnemyPercent: tuning.openingEnemyPercent,
-            openingDudPercent: tuning.openingDudPercent,
-          }
-        : { [key]: tuning[key] };
-    callbacks.onResetTuningChange?.(patch);
+    callbacks.onResetTuningChange?.({ [key]: tuning[key] });
   };
   for (const key of [...LIVE_KEYS, ...RESET_KEYS]) {
     const number = numbers[key];
@@ -478,7 +462,7 @@ export function createAppUi(
     setTuningPanelOpen(open);
     callbacks.onTuningPanelChange?.(open);
   };
-  const onRestart = (): void => callbacks.onRestart?.({ ...tuning });
+  const onRestart = (): void => callbacks.onRestart?.();
   const onApplyReset = (): void => callbacks.onRestart?.({ ...tuning });
   const onAim = (): void => callbacks.onAimChange?.(Number(aim.value));
   const onMotion = (): void =>
@@ -522,7 +506,7 @@ export function createAppUi(
   }
   function setLoading(
     isLoading: boolean,
-    message = "Loading physics lab…",
+    message = "Loading cabinet and physics…",
   ): void {
     loading.hidden = !isLoading;
     if (isLoading) loading.textContent = message;
@@ -552,28 +536,27 @@ export function createAppUi(
     tuningToggle.setAttribute("aria-expanded", String(open));
   }
   function updateStats(
-    stats: Pick<
-      SimulationStats,
-      | "active"
-      | "collected"
-      | "allyCollected"
-      | "enemyCollected"
-      | "dudCollected"
-    >,
+    stats: Pick<SimulationStats, "active" | "collected">,
   ): void {
     active.textContent = String(stats.active);
     collected.textContent = String(stats.collected);
-    allyCollected.textContent = String(stats.allyCollected);
-    enemyCollected.textContent = String(stats.enemyCollected);
-    dudCollected.textContent = String(stats.dudCollected);
   }
   function updateMetrics(
     stats: SimulationStats,
     snapshot: MetricsSnapshot = {},
   ): void {
     renderMetrics(metrics, stats, snapshot);
+    combatUi.updateDiagnostics(metrics, stats);
+  }
+  function updateEncounter(snapshot: EncounterSnapshot, trays: readonly FeedTray[]): void {
+    combatUi.update(snapshot, trays);
+    drop.disabled = snapshot.phase !== "active" || snapshot.paused;
+  }
+  function showCombat(batch: CombatStepResult): void {
+    combatUi.showCombat(batch);
   }
   function destroy(): void {
+    combatUi.destroy();
     for (const dispose of cleanup.splice(0)) dispose();
     root.replaceChildren();
   }
@@ -597,14 +580,26 @@ export function createAppUi(
       radius: tuning.radius,
       thickness: tuning.thickness,
       shelfFront: tuning.shelfFront,
-      openingEnemyPercent: tuning.openingEnemyPercent,
-      openingDudPercent: tuning.openingDudPercent,
     }),
     getChuteSettings: chuteControls.get,
     setChuteSettings: chuteControls.set,
     setTuning,
     updateStats,
     updateMetrics,
+    updateEncounter,
+    updateRun(snapshot) {
+      root.dataset.runPhase = snapshot.phase;
+      footer.hidden = snapshot.phase !== "encounter";
+      const docked = snapshot.phase === "shop";
+      stage.classList.toggle("has-shop", docked);
+      runHost.classList.toggle("is-docked", docked);
+      if (docked && runHost.parentElement !== stage) stage.append(runHost);
+      else if (!docked && runHost.parentElement !== main) footer.after(runHost);
+      runUi.update(snapshot);
+      combatUi.updateRun(snapshot);
+      drop.disabled = snapshot.phase !== "encounter" || snapshot.encounter.phase !== "active" || snapshot.encounter.paused;
+    },
+    showCombat,
     setFeedback: (message) => {
       feedback.textContent = message;
     },

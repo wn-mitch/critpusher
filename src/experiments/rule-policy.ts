@@ -5,7 +5,7 @@ import type {
   SurfaceCell,
 } from "./solver-contracts";
 
-const CENTER_OUT_ORDER = [2, 1, 3, 0, 4] as const;
+export const CENTER_OUT_ORDER = [2, 1, 3, 0, 4] as const;
 const RELEASE_PHASE = 0;
 
 function count(cell: SurfaceCell): number {
@@ -18,7 +18,7 @@ function count(cell: SurfaceCell): number {
  * they can pay out in the next cycle. Upper occupancy is useful feed, but is
  * deliberately weaker than already-supported lower-shelf density.
  */
-function laneScore(lane: SolverLane): number {
+export function laneScore(lane: SolverLane): number {
   const upper = count(lane.upper);
   const rear = count(lane.lowerRear);
   const middle = count(lane.lowerMiddle);
@@ -63,7 +63,7 @@ function phaseDistance(left: number, right: number): number {
   return Math.min(difference, 1 - difference);
 }
 
-function chooseWaitQuarters(phase: number): 0 | 1 | 2 | 3 {
+export function chooseWaitQuarters(phase: number): 0 | 1 | 2 | 3 {
   const normalized = Number.isFinite(phase) ? ((phase % 1) + 1) % 1 : 0;
   let best: 0 | 1 | 2 | 3 = 0;
   let bestDistance = phaseDistance(normalized, RELEASE_PHASE);

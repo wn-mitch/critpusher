@@ -105,7 +105,7 @@ export function bindControls(options: InputControllerOptions): InputController {
   };
 
   const onCanvasPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || options.dropButton.disabled) return;
     event.preventDefault();
     const point = pointFromEvent(event);
     activePointers.add(event.pointerId);
@@ -152,7 +152,7 @@ export function bindControls(options: InputControllerOptions): InputController {
   );
 
   const onDropPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || options.dropButton.disabled) return;
     event.preventDefault();
     const key = `drop:${event.pointerId}`;
     capturePointer(options.dropButton, event.pointerId);
@@ -163,7 +163,7 @@ export function bindControls(options: InputControllerOptions): InputController {
     releasePointer(options.dropButton, event.pointerId);
   };
   const onDropClick = (event: MouseEvent): void => {
-    if (event.detail === 0) callbacks.onDrop?.();
+    if (event.detail === 0 && !options.dropButton.disabled) callbacks.onDrop?.();
   };
   options.dropButton.addEventListener("pointerdown", onDropPointerDown);
   options.dropButton.addEventListener("pointerup", onDropPointerUp);
@@ -199,6 +199,7 @@ export function bindControls(options: InputControllerOptions): InputController {
       return;
     }
     if (event.key === " ") {
+      if (options.dropButton.disabled) return;
       event.preventDefault();
       if (!event.repeat)
         repeats.start(

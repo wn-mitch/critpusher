@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Simulation } from "../src/contracts";
+import { GOLD_ONLY_MIX } from "../src/combat/config";
+import type { Simulation, Tuning } from "../src/contracts";
 import { createSimulation } from "../src/simulation";
 import { PLAYER_DROP_Z } from "../src/simulation/config";
 
 const simulations: Simulation[] = [];
 
 async function simulationWith(
-  tuning: Parameters<typeof createSimulation>[0] = {},
+  tuning: Partial<Tuning> = {},
 ): Promise<Simulation> {
-  const simulation = await createSimulation({ density: 0, ...tuning });
+  const simulation = await createSimulation(
+    { density: 0, ...tuning },
+    { openingMix: GOLD_ONLY_MIX },
+  );
   simulations.push(simulation);
   return simulation;
 }
@@ -19,7 +23,9 @@ function advance(simulation: Simulation, steps: number): void {
 
 function expectConserved(simulation: Simulation): void {
   const stats = simulation.stats();
-  expect(stats.spawned).toBe(stats.active + stats.collected + stats.lost);
+  expect(stats.spawned).toBe(
+    stats.active + stats.collected + stats.detonated + stats.lost,
+  );
 }
 
 afterEach(() => {

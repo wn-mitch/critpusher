@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ENCOUNTER_CONFIG } from "../src/combat/config";
 import type {
+  CoinEvent,
   CoinView,
-  CollectionEvent,
   Simulation,
   SimulationStats,
   Tuning,
@@ -18,7 +19,8 @@ import { DEFAULT_TUNING } from "../src/simulation";
 function coin(id: number, x: number, y: number, z: number): CoinView {
   return {
     id,
-    faction: "ally",
+    type: "gold",
+    bombHits: 0,
     position: { x, y, z },
     rotation: { x: 0, y: 0, z: 0, w: 1 },
     radius: 0.35,
@@ -40,18 +42,37 @@ function simulationFixture(initialCoins: CoinView[] = []): {
     sleeping: 0,
     spawned: coins.size,
     collected: 0,
-    allyCollected: 0,
-    enemyCollected: 0,
-    dudCollected: 0,
+    collectedByType: {
+      gold: 0,
+      diamond: 0,
+      sword: 0,
+      skull: 0,
+      potion: 0,
+      bomb: 0,
+    },
+    detonated: 0,
     lost: 0,
     pendingRain: 0,
     physicsMs: 0,
     pusherZ: -3,
     phase: 0,
+    gizmos: { active: 0, spawned: 0, collected: 0, lost: 0, pending: 0 },
   };
   const simulation: Simulation = {
     coins,
+    gizmos: new Map(),
     tuning,
+    config: DEFAULT_ENCOUNTER_CONFIG,
+    setBombsActive() {},
+    configureGizmo() { throw new Error("Lane fixtures do not model gizmos"); },
+    drainGizmoEvents: () => [],
+    cancelRain() {},
+    setFeedLayout() { throw new Error("Lane fixtures do not model feeders"); },
+    feedTrays: () => [],
+    releaseFeed: () => null,
+    startFeedBurst: () => false,
+    cancelFeedBurst() {},
+    drainFeedAdmissions: () => [],
     step() {},
     drop: () => false,
     releaseChutes: () => null,
@@ -203,20 +224,26 @@ describe("five-lane physical observation", () => {
   it("reports rim overhang and drains only real collection events per lane", () => {
     const fixture = simulationFixture([coin(1, -4, 0.1, 3.8)]);
     const observer = createLaneObserver();
-    const events: CollectionEvent[] = [
+    const events: CoinEvent[] = [
       {
         id: 2,
         kind: "collected",
-        faction: "ally",
+        type: "gold",
         position: { x: -3, y: -1, z: 4 },
       },
       {
         id: 3,
         kind: "collected",
-        faction: "ally",
+        type: "gold",
         position: { x: 5, y: -1, z: 4 },
       },
-      { id: 4, kind: "lost", faction: "ally", position: { x: 0, y: -1, z: 4 } },
+      {
+        id: 4,
+        kind: "lost",
+        type: "gold",
+        reason: "out-of-bounds",
+        position: { x: 0, y: -1, z: 4 },
+      },
     ];
     observer.record(events);
 
@@ -239,6 +266,29 @@ describe("five-lane physical observation", () => {
         .lanes.every((value) => value.recentCollected === 0),
     ).toBe(true);
   });
+  it("masks geometric counts and velocity history to readable coins", () => {
+    const visible = coin(1, 0, 0.1, 0.5);
+    const hidden = coin(2, 0, 0.5, 0.5);
+    const fixture = simulationFixture([visible, hidden]);
+    const observer = createLaneObserver();
+
+    let observation = observer.observe(fixture.simulation, new Set([visible.id]));
+    expect(observation.active).toBe(1);
+    expect(observation.lanes[2]!.lowerMiddle.count).toBe(1);
+    expect(observation.lanes[2]!.lowerMiddle.meanHeight).toBe(0.1);
+
+    fixture.stats.time = 0.5;
+    visible.position.z = 1;
+    hidden.position.z = 1.5;
+    observation = observer.observe(fixture.simulation, new Set([visible.id]));
+    expect(observation.lanes[2]!.lowerMiddle.meanForwardSpeed).toBe(1);
+
+    fixture.stats.time = 1;
+    observation = observer.observe(fixture.simulation, new Set([hidden.id]));
+    expect(observation.active).toBe(1);
+    expect(observation.lanes[2]!.lowerMiddle.meanForwardSpeed).toBeNull();
+  });
+
 });
 
 describe("rule policy", () => {

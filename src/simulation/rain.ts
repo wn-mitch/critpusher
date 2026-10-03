@@ -1,5 +1,9 @@
-import type { CoinFaction, Tuning } from "../contracts";
+import { COIN_TYPES, type CoinType, type Tuning } from "../contracts";
+import { normalizeMix } from "../combat/config";
+import type { CoinMix } from "../combat/types";
+import { randomFactory } from "../random";
 import { DEFAULT_TUNING } from "./config";
+import { MACHINE_GEOMETRY } from "../machine-geometry";
 
 export interface RainPose {
   x: number;
@@ -9,33 +13,24 @@ export interface RainPose {
 }
 
 export interface RainDrop {
-  faction: CoinFaction;
+  type: CoinType;
   pose: RainPose;
   releaseTick: number;
 }
 
-const SIDE_INSET = 4.55;
-const REAR_CLEARANCE = -1.55;
+const SIDE_INSET = MACHINE_GEOMETRY.rainHalfWidth;
+const REAR_CLEARANCE = MACHINE_GEOMETRY.rainLowerRearZ;
 const GAP = 0.06;
 const UPPER_SHARE = 0.3;
-const UPPER_SOURCE_REAR = -3.55;
-const REAR_WALL_INTERIOR = -4.05;
-const UPPER_SOURCE_FRONT = -2.3;
+const UPPER_SOURCE_REAR = MACHINE_GEOMETRY.rainUpperRearZ;
+const REAR_WALL_INTERIOR = MACHINE_GEOMETRY.innerRearZ;
+const UPPER_SOURCE_FRONT = MACHINE_GEOMETRY.rainUpperFrontZ;
 const CLEARANCE_MARGIN = 0.04;
 const MAX_TILT = 0.16;
 const MAX_BATCH_SIZE = 12;
 const RAIN_WINDOW_TICKS = 150;
 const MAX_POSITION_ATTEMPTS = 96;
 
-function randomFactory(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let value = Math.imul(state ^ (state >>> 15), 1 | state);
-    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function bounded(
   value: number,
@@ -186,7 +181,8 @@ function gridDimensions(
   };
 }
 
-export function planRain(tuning: Tuning): RainDrop[] {
+export function planRain(tuning: Tuning, mix: CoinMix): RainDrop[] {
+  const normalizedMix = normalizeMix(mix);
   const density = Math.trunc(bounded(tuning.density, 0, 1000, 0));
   if (density === 0) return [];
 
@@ -209,7 +205,7 @@ export function planRain(tuning: Tuning): RainDrop[] {
   const minX = -SIDE_INSET + horizontalReach;
   const maxX = SIDE_INSET - horizontalReach;
   const lowerRawMinZ = REAR_CLEARANCE + horizontalReach;
-  const lowerMaxZ = shelfFront - 0.3 - horizontalReach;
+  const lowerMaxZ = shelfFront - MACHINE_GEOMETRY.rainFrontInset - horizontalReach;
   // Keep the upper source near the pusher while preserving a full-cylinder
   // gap from the lower zone. The source rear edge is wall-clearance adjusted.
   const upperMinZ = Math.max(
@@ -275,7 +271,7 @@ export function planRain(tuning: Tuning): RainDrop[] {
 
     for (const position of upperPositions) {
       drops.push({
-        faction: "ally",
+        type: "sword",
         pose: {
           x: position.x,
           y: dropHeight + 0.04 + random() * 0.28,
@@ -287,7 +283,7 @@ export function planRain(tuning: Tuning): RainDrop[] {
     }
     for (const position of lowerPositions) {
       drops.push({
-        faction: "ally",
+        type: "sword",
         pose: {
           x: position.x,
           y: dropHeight + 0.04 + random() * 0.28,
@@ -299,32 +295,33 @@ export function planRain(tuning: Tuning): RainDrop[] {
     }
   }
 
-  const enemyPercent = bounded(
-    tuning.openingEnemyPercent,
-    0,
-    100,
-    DEFAULT_TUNING.openingEnemyPercent,
+  const quotas = COIN_TYPES.map((type, order) => {
+    const exact = (drops.length * normalizedMix[type]) / 100;
+    const count = Math.floor(exact);
+    return { type, order, count, remainder: exact - count };
+  });
+  const remainderCount =
+    drops.length - quotas.reduce((sum, quota) => sum + quota.count, 0);
+  const ranked = [...quotas].sort(
+    (a, b) => b.remainder - a.remainder || a.order - b.order,
   );
-  const dudPercent = Math.min(
-    100 - enemyPercent,
-    bounded(tuning.openingDudPercent, 0, 100, DEFAULT_TUNING.openingDudPercent),
-  );
-  const enemyCount = Math.round((drops.length * enemyPercent) / 100);
-  const dudCount = Math.min(
-    drops.length - enemyCount,
-    Math.round((drops.length * dudPercent) / 100),
-  );
-  for (let index = 0; index < enemyCount + dudCount; index += 1) {
-    drops[index]!.faction = index < enemyCount ? "enemy" : "dud";
+  for (let index = 0; index < remainderCount; index += 1) {
+    ranked[index]!.count += 1;
+  }
+  let assigned = 0;
+  for (const { type, count } of quotas) {
+    for (let index = 0; index < count; index += 1) {
+      drops[assigned++]!.type = type;
+    }
   }
 
-  // A separate stream shuffles factions without changing seeded rain geometry.
-  const factionRandom = randomFactory(tuning.seed ^ 0x4f1bbcdc);
+  // A separate stream shuffles types without changing seeded rain geometry.
+  const mixRandom = randomFactory(tuning.seed ^ 0x4f1bbcdc);
   for (let index = drops.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(factionRandom() * (index + 1));
-    const faction = drops[index]!.faction;
-    drops[index]!.faction = drops[swapIndex]!.faction;
-    drops[swapIndex]!.faction = faction;
+    const swapIndex = Math.floor(mixRandom() * (index + 1));
+    const type = drops[index]!.type;
+    drops[index]!.type = drops[swapIndex]!.type;
+    drops[swapIndex]!.type = type;
   }
 
   return drops;

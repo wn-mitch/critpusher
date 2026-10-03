@@ -1,5 +1,6 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
 import { describe, expect, it } from "vitest";
+import { GOLD_ONLY_MIX } from "../src/combat/config";
 import {
   DEFAULT_TUNING,
   classifyCoinPosition,
@@ -7,7 +8,7 @@ import {
 } from "../src/simulation";
 import { CoinLifecycle } from "../src/simulation/lifecycle";
 import { RapierWorld } from "../src/simulation/rapier-world";
-import type { CollectionEvent, Simulation, Tuning } from "../src/contracts";
+import type { CoinEvent, Simulation, Tuning } from "../src/contracts";
 
 function advance(simulation: Simulation, steps: number): void {
   for (let index = 0; index < steps; index += 1) simulation.step();
@@ -23,7 +24,9 @@ function drainRain(simulation: Simulation, limit = 2_000): void {
 
 function expectConservation(simulation: Simulation): void {
   const stats = simulation.stats();
-  expect(stats.spawned).toBe(stats.active + stats.collected + stats.lost);
+  expect(stats.spawned).toBe(
+    stats.active + stats.collected + stats.detonated + stats.lost,
+  );
   expect(stats.pendingRain).toBeGreaterThanOrEqual(0);
 }
 
@@ -44,17 +47,23 @@ function stateWithoutIds(
 }
 
 async function simulationWith(tuning: Partial<Tuning>): Promise<Simulation> {
-  const simulation = await createSimulation({ ...DEFAULT_TUNING, ...tuning });
+  const simulation = await createSimulation(
+    { ...DEFAULT_TUNING, ...tuning },
+    { openingMix: GOLD_ONLY_MIX },
+  );
   drainRain(simulation);
   return simulation;
 }
 
 describe("physical simulation lifecycle", () => {
   it("starts with conserved counters, including staged rain", async () => {
-    const simulation = await createSimulation({
-      ...DEFAULT_TUNING,
-      density: 24,
-    });
+    const simulation = await createSimulation(
+      {
+        ...DEFAULT_TUNING,
+        density: 24,
+      },
+      { openingMix: GOLD_ONLY_MIX },
+    );
 
     expectConservation(simulation);
     drainRain(simulation);
@@ -272,7 +281,7 @@ describe("physical simulation lifecycle", () => {
     expect(world.addCylinder(frontCoin.id, frontCoin)).toBe(true);
     expect(world.addCylinder(lostCoin.id, lostCoin)).toBe(true);
 
-    const events: CollectionEvent[] = [];
+    const events: CoinEvent[] = [];
     let frontYBeforeCrossing = frontCoin.position.y;
     for (let step = 0; step < 120 && lifecycle.active > 0; step += 1) {
       world.step();
@@ -290,7 +299,7 @@ describe("physical simulation lifecycle", () => {
         }
 
         if (resolution === "collected") lifecycle.collect(id, position);
-        else lifecycle.lose(id, position);
+        else lifecycle.lose(id, "out-of-bounds", position);
         world.removeCylinder(id);
       });
       events.push(...lifecycle.drainEvents());
@@ -300,7 +309,8 @@ describe("physical simulation lifecycle", () => {
       {
         id: lostCoin.id,
         kind: "lost",
-        faction: "ally",
+        type: "sword",
+        reason: "out-of-bounds",
         position: expect.objectContaining({
           y: expect.any(Number),
           z: expect.any(Number),
@@ -309,7 +319,7 @@ describe("physical simulation lifecycle", () => {
       {
         id: frontCoin.id,
         kind: "collected",
-        faction: "ally",
+        type: "sword",
         position: expect.objectContaining({
           y: expect.any(Number),
           z: expect.any(Number),
@@ -326,9 +336,15 @@ describe("physical simulation lifecycle", () => {
       active: 0,
       spawned: 2,
       collected: 1,
-      allyCollected: 1,
-      enemyCollected: 0,
-      dudCollected: 0,
+      collectedByType: {
+        gold: 0,
+        diamond: 0,
+        sword: 1,
+        skull: 0,
+        potion: 0,
+        bomb: 0,
+      },
+      detonated: 0,
       lost: 1,
     });
 
@@ -337,14 +353,20 @@ describe("physical simulation lifecycle", () => {
     expect(world.removeCylinder(frontCoin.id)).toBe(false);
     expect(world.removeCylinder(lostCoin.id)).toBe(false);
     expect(lifecycle.collect(frontCoin.id)).toBe(false);
-    expect(lifecycle.lose(lostCoin.id)).toBe(false);
+    expect(lifecycle.lose(lostCoin.id, "out-of-bounds")).toBe(false);
     expect(lifecycle.stats()).toEqual({
       active: 0,
       spawned: 2,
       collected: 1,
-      allyCollected: 1,
-      enemyCollected: 0,
-      dudCollected: 0,
+      collectedByType: {
+        gold: 0,
+        diamond: 0,
+        sword: 1,
+        skull: 0,
+        potion: 0,
+        bomb: 0,
+      },
+      detonated: 0,
       lost: 1,
     });
 
@@ -372,14 +394,15 @@ describe("physical simulation lifecycle", () => {
     expect(world.addCylinder(frontCoin.id, frontCoin)).toBe(true);
     expect(world.addCylinder(rearCoin.id, rearCoin)).toBe(true);
 
-    const events: CollectionEvent[] = [];
+    const events: CoinEvent[] = [];
     for (let step = 0; step < 180; step += 1) {
       world.step();
       world.forEachCoin((id, body) => {
         const position = body.translation();
         const resolution = classifyCoinPosition(position, shelfFront);
         if (resolution === "collected") lifecycle.collect(id, position);
-        else if (resolution === "lost") lifecycle.lose(id, position);
+        else if (resolution === "lost")
+          lifecycle.lose(id, "out-of-bounds", position);
         else lifecycle.update(id, position, body.rotation());
         if (resolution) world.removeCylinder(id);
       });
@@ -412,26 +435,39 @@ describe("physical simulation lifecycle", () => {
     );
     const lostPosition = { x: 0.25, y: -9, z: 0 };
 
-    expect(lifecycle.lose(coin.id, lostPosition)).toBe(true);
-    expect(lifecycle.lose(coin.id, lostPosition)).toBe(false);
+    expect(lifecycle.lose(coin.id, "out-of-bounds", lostPosition)).toBe(true);
+    expect(lifecycle.lose(coin.id, "out-of-bounds", lostPosition)).toBe(false);
     expect(lifecycle.collect(coin.id, lostPosition)).toBe(false);
     expect(lifecycle.coins.has(coin.id)).toBe(false);
     expect(lifecycle.drainEvents()).toEqual([
-      { id: coin.id, kind: "lost", faction: "ally", position: lostPosition },
+      {
+        id: coin.id,
+        kind: "lost",
+        type: "sword",
+        reason: "out-of-bounds",
+        position: lostPosition,
+      },
     ]);
     expect(lifecycle.drainEvents()).toEqual([]);
     expect(lifecycle.stats()).toEqual({
       active: 0,
       spawned: 1,
       collected: 0,
-      allyCollected: 0,
-      enemyCollected: 0,
-      dudCollected: 0,
+      collectedByType: {
+        gold: 0,
+        diamond: 0,
+        sword: 0,
+        skull: 0,
+        potion: 0,
+        bomb: 0,
+      },
+      detonated: 0,
       lost: 1,
     });
     expect(lifecycle.stats().spawned).toBe(
       lifecycle.stats().active +
         lifecycle.stats().collected +
+        lifecycle.stats().detonated +
         lifecycle.stats().lost,
     );
 
@@ -441,9 +477,15 @@ describe("physical simulation lifecycle", () => {
       active: 0,
       spawned: 0,
       collected: 0,
-      allyCollected: 0,
-      enemyCollected: 0,
-      dudCollected: 0,
+      collectedByType: {
+        gold: 0,
+        diamond: 0,
+        sword: 0,
+        skull: 0,
+        potion: 0,
+        bomb: 0,
+      },
+      detonated: 0,
       lost: 0,
     });
     const nextCoin = lifecycle.spawn(
@@ -523,18 +565,21 @@ describe("physical simulation lifecycle", () => {
   });
 
   it("sanitizes hostile tuning values at the public boundary", async () => {
-    const simulation = await createSimulation({
-      seed: Number.POSITIVE_INFINITY,
-      density: Number.NaN,
-      radius: Number.NEGATIVE_INFINITY,
-      thickness: Number.POSITIVE_INFINITY,
-      friction: Number.NaN,
-      stroke: Number.POSITIVE_INFINITY,
-      period: Number.NEGATIVE_INFINITY,
-      shelfFront: Number.NaN,
-      dropHeight: Number.NaN,
-      dropRate: Number.POSITIVE_INFINITY,
-    });
+    const simulation = await createSimulation(
+      {
+        seed: Number.POSITIVE_INFINITY,
+        density: Number.NaN,
+        radius: Number.NEGATIVE_INFINITY,
+        thickness: Number.POSITIVE_INFINITY,
+        friction: Number.NaN,
+        stroke: Number.POSITIVE_INFINITY,
+        period: Number.NEGATIVE_INFINITY,
+        shelfFront: Number.NaN,
+        dropHeight: Number.NaN,
+        dropRate: Number.POSITIVE_INFINITY,
+      },
+      { openingMix: GOLD_ONLY_MIX },
+    );
 
     const tuning = simulation.tuning;
     for (const value of Object.values(tuning))

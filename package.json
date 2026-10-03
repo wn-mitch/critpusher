@@ -7,8 +7,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
+    "deploy": "npm run test && npm run build && wrangler deploy",
     "test": "vitest run",
-    "experiment": "tsx scripts/experiments.ts",
+    "fight-study": "tsx scripts/combat-experiments.ts",
+    "run-study": "tsx scripts/run-experiments.ts",
     "solve": "tsx scripts/release-experiments.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write ."
@@ -18,12 +20,16 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.19.1",
     "@types/three": "^0.186.0",
     "prettier": "^3.9.9",
+    "stream-json": "^3.7.0",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "wrangler": "4.95.0"
   }
 }

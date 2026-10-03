@@ -1,4 +1,5 @@
-import type { CollectionEvent, SimulationStats } from "../contracts";
+import type { CoinEvent, SimulationStats } from "../contracts";
+import type { CombatStepResult } from "../combat/types";
 import type { CollectionBurstUpdate } from "../feedback/cascade";
 
 export type AudioSupportState = "supported" | "unavailable";
@@ -37,10 +38,11 @@ export interface AudioEngine {
   update(stats: Readonly<SimulationStats>): void;
   /** Aggregates raw collection events into a bounded clink; a burst update enables payout cues. */
   collect(
-    events: readonly CollectionEvent[],
+    events: readonly CoinEvent[],
     burst?: CollectionBurstUpdate,
   ): void;
-  /** Clears transient feedback and simulation-derived timing without changing sound settings. */
+  /** Plays event-backed combat cues without polling HP or currency state. */
+  combat(batch: CombatStepResult): void;
   reset(): void;
   /** Plays the sound of a newly released coin, after arm(). */
   release(): void;
@@ -135,7 +137,6 @@ export function createAudioEngine(): AudioEngine {
   let lastStatsTime: number | undefined;
   let aggregateTimer: TimerHandle | undefined;
   let pendingCollected = 0;
-  let pendingOther = 0;
   let activeBurstId: number | undefined;
   let highestBurstTier = -1;
   let pendingPayoutTier: number | undefined;
@@ -148,8 +149,6 @@ export function createAudioEngine(): AudioEngine {
       globalThis.clearTimeout(aggregateTimer);
       aggregateTimer = undefined;
     }
-    pendingCollected = 0;
-    pendingOther = 0;
     pendingPayoutTier = undefined;
     lastPayoutAt = undefined;
   };
@@ -260,7 +259,17 @@ export function createAudioEngine(): AudioEngine {
     harmonic.start(now);
   };
 
-  const startVoice = (kind: "clink" | "payout", intensity: number): void => {
+  const startVoice = (
+    kind:
+      | "clink"
+      | "payout"
+      | "attack"
+      | "incoming"
+      | "heal"
+      | "currency"
+      | "detonation",
+    intensity: number,
+  ): void => {
     if (
       !context ||
       !master ||
@@ -272,7 +281,10 @@ export function createAudioEngine(): AudioEngine {
     const gain = context.createGain();
     const filter = context.createBiquadFilter();
     const oscillator = context.createOscillator();
-    const harmonic = kind === "payout" ? context.createOscillator() : undefined;
+    const harmonic =
+      kind === "payout" || kind === "detonation"
+        ? context.createOscillator()
+        : undefined;
     const level = clamp(intensity, 0.05, 1);
     const duration = kind === "clink" ? 0.16 : TRANSIENT_SECONDS;
     const end = now + duration;
@@ -287,19 +299,33 @@ export function createAudioEngine(): AudioEngine {
       filter.frequency.value = 380;
       filter.Q.value = 1.2;
     } else {
+      const frequency: Record<
+        Exclude<typeof kind, "clink">,
+        number
+      > = {
+        payout: 560,
+        attack: 760,
+        incoming: 245,
+        heal: 620,
+        currency: 980,
+        detonation: 130,
+      };
       gain.gain.exponentialRampToValueAtTime(0.12 * level, now + 0.012);
       gain.gain.exponentialRampToValueAtTime(0.0001, end);
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(560 + 170 * level, now);
-      oscillator.frequency.exponentialRampToValueAtTime(400 + 110 * level, end);
+      oscillator.type = kind === "detonation" ? "sawtooth" : "sine";
+      oscillator.frequency.setValueAtTime(frequency[kind] + 90 * level, now);
+      oscillator.frequency.exponentialRampToValueAtTime(
+        frequency[kind] * 0.7,
+        end,
+      );
       harmonic?.start(now);
       if (harmonic) {
         harmonic.type = "sine";
-        harmonic.frequency.setValueAtTime(oscillator.frequency.value * 2, now);
+        harmonic.frequency.setValueAtTime(oscillator.frequency.value * 1.5, now);
         harmonic.connect(gain);
       }
-      filter.type = "lowpass";
-      filter.frequency.value = 2400;
+      filter.type = kind === "incoming" ? "highpass" : "lowpass";
+      filter.frequency.value = kind === "incoming" ? 900 : 2400;
       filter.Q.value = 0.8;
     }
     oscillator.connect(filter);
@@ -331,14 +357,13 @@ export function createAudioEngine(): AudioEngine {
   const flushCollection = (): void => {
     aggregateTimer = undefined;
     const collected = pendingCollected;
-    const other = pendingOther;
     const payoutTier = pendingPayoutTier;
     pendingCollected = 0;
-    pendingOther = 0;
     pendingPayoutTier = undefined;
     if (!isAllowed()) return;
-    const total = collected + other;
-    if (total > 0) startVoice("clink", clamp(0.35 + total / 20, 0.35, 1));
+    if (collected > 0) {
+      startVoice("clink", clamp(0.35 + collected / 20, 0.35, 1));
+    }
     if (payoutTier === undefined) return;
 
     const now = performance.now();
@@ -465,7 +490,7 @@ export function createAudioEngine(): AudioEngine {
   };
 
   const collect = (
-    events: readonly CollectionEvent[],
+    events: readonly CoinEvent[],
     burst?: CollectionBurstUpdate,
   ): void => {
     if (!isAllowed()) return;
@@ -474,8 +499,6 @@ export function createAudioEngine(): AudioEngine {
       if (event.kind === "collected") {
         pendingCollected += 1;
         collected += 1;
-      } else {
-        pendingOther += 1;
       }
     }
 
@@ -500,7 +523,27 @@ export function createAudioEngine(): AudioEngine {
       }
     }
 
-    if (events.length > 0) scheduleCollectionFlush();
+    if (collected > 0) scheduleCollectionFlush();
+  };
+  const combat = (batch: CombatStepResult): void => {
+    if (!isAllowed()) return;
+    const outgoing = batch.delta.swordDamage + batch.delta.bombDamageToEnemy;
+    const incoming = batch.delta.skullDamage + batch.delta.bombDamageToPlayer;
+    if (outgoing > 0) {
+      startVoice("attack", clamp(0.4 + outgoing / 20, 0.4, 1));
+    }
+    if (incoming > 0) {
+      startVoice("incoming", clamp(0.4 + incoming / 20, 0.4, 1));
+    }
+    if (batch.delta.healingUsed > 0) {
+      startVoice("heal", clamp(0.4 + batch.delta.healingUsed / 20, 0.4, 1));
+    }
+    if (batch.delta.currencyGained > 0) {
+      startVoice("currency", clamp(0.4 + batch.delta.currencyGained / 20, 0.4, 1));
+    }
+    if (batch.delta.detonations > 0) {
+      startVoice("detonation", clamp(0.5 + batch.delta.detonations / 8, 0.5, 1));
+    }
   };
 
   const reset = (): void => {
@@ -570,6 +613,7 @@ export function createAudioEngine(): AudioEngine {
     setVolume,
     update,
     collect,
+    combat,
     reset,
     release,
     dispose,

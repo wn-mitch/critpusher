@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createJevPolicy } from "../scripts/jev-policy";
+import { createCombatJevPolicy, createJevPolicy } from "../scripts/jev-policy";
 import type {
+  CombatSolverState,
   SolverState,
   SurfaceCell,
 } from "../src/experiments/solver-contracts";
@@ -43,6 +44,92 @@ function observedState(): SolverState {
     releaseCoins: 2,
     feed: "chute",
     recent: [],
+  };
+}
+
+function combatObservedState(timing: "adaptive" | "fixed"): CombatSolverState {
+  const board = observedState().board;
+  const typeCounts = {
+    gold: 0,
+    diamond: 0,
+    sword: 0,
+    skull: 0,
+    potion: 0,
+    bomb: 0,
+  };
+  return {
+    observation: {
+      visibilityModel: "three-cap-rays-v3",
+      board,
+      playerHp: 80,
+      playerMaxHp: 100,
+      enemies: [{
+        id: "encounter-1-wave-1-guard",
+        name: "Guard",
+        hp: 75,
+        maxHp: 120,
+        chuteId: "enemy-guard",
+        admittedRounds: 3,
+        kind: "guard",
+      }],
+      frontEnemyId: "encounter-1-wave-1-guard",
+      waveIndex: 0,
+      waveCount: 1,
+      livingWaveHp: 75,
+      currency: 4,
+      ownedBuild: {
+        bags: [], stickers: [], effectLevels: { temperedSwords: 0, restorativeBrew: 0 },
+        releaseMode: "ordinary", detonationPolicy: "physical",
+        coinRadius: 0.32, coinThickness: 0.13, openingPopulation: 400, coinWeight: 1,
+      },
+      combo: { chain: 0, lastSwordTick: null, windowTicks: 0, maxMultiplier: 1, ticksRemaining: 0 },
+      rules: {
+        swordDamage: 3,
+        skullDamage: 2,
+        potionHealing: 4,
+        bombDamage: 5,
+        bomb: {
+          hitThreshold: 3,
+          minClosingSpeed: 0.75,
+          blastRadius: 1.75,
+          blastDeltaSpeed: 3,
+        },
+      },
+      candidates: Array.from({ length: 5 }, (_, lane) => {
+        const x = -4 + lane * 2;
+        return {
+          aimX: x,
+          chutes: [
+            { id: `player-${lane}`, ownerId: "player", slot: 0, enabled: true, x, source: "player" as const },
+            { id: `enemy-left-${lane}`, ownerId: "guard", slot: -1, enabled: true, x: x - 0.33, source: "enemy" as const },
+            { id: `enemy-right-${lane}`, ownerId: "guard", slot: 1, enabled: true, x: x + 0.33, source: "enemy" as const },
+          ],
+        };
+      }),
+      feed: [
+        {
+          id: "player-0",
+          ownerId: "player",
+          slot: 0,
+          enabled: true,
+          x: 0,
+          source: "player",
+          preview: ["sword", "sword", "sword", "sword", "bomb"],
+        },
+      ],
+      exposedCoins: [],
+      lanes: Array.from({ length: 5 }, (_, index) => ({
+        index,
+        upper: { counts: { ...typeCounts }, nearThresholdBombs: 0 },
+        lowerRear: { counts: { ...typeCounts }, nearThresholdBombs: 0 },
+        lowerMiddle: { counts: { ...typeCounts }, nearThresholdBombs: 0 },
+        lowerFront: { counts: { ...typeCounts }, nearThresholdBombs: 0 },
+        nearEdge: { counts: { ...typeCounts }, nearThresholdBombs: 0 },
+      })),
+      recentEffects: [],
+    },
+    candidateAimXs: [-4, -2, 0, 2, 4],
+    timing,
   };
 }
 
@@ -265,6 +352,36 @@ describe("createJevPolicy", () => {
     };
     expect(questions.action.criteria.lane2_wait0).toContain(
       "chute positions -1.5, 0, 1.5",
+    );
+  });
+});
+
+describe("createCombatJevPolicy", () => {
+  it("preserves a fixed-timing suggestion and charges the combat request budget", async () => {
+    const combatProbabilities = {
+      ...probabilities(),
+      lane0_wait0: 0.01,
+      lane2_wait3: 0.09,
+    };
+    const fetchImpl: typeof fetch = async () =>
+      Response.json(
+        jevPayload({
+          probabilities: combatProbabilities,
+          type: "choice",
+          choice: "lane2_wait3",
+        }),
+      );
+    const policy = createCombatJevPolicy({
+      apiKey: "test-key",
+      maxRequests: 1,
+      fetchImpl,
+    });
+
+    const decision = await policy(combatObservedState("fixed"));
+
+    expect(decision.action).toEqual({ lane: 2, waitQuarters: 3 });
+    await expect(policy(combatObservedState("fixed"))).rejects.toThrow(
+      "Jev request budget exhausted",
     );
   });
 });

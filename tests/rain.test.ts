@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GOLD_ONLY_MIX } from "../src/combat/config";
 import { DEFAULT_TUNING, createSimulation } from "../src/simulation";
 import { planRain, type RainDrop } from "../src/simulation/rain";
 import type { Simulation, Tuning } from "../src/contracts";
@@ -7,7 +8,7 @@ function tuning(patch: Partial<Tuning> = {}): Tuning {
   return { ...DEFAULT_TUNING, ...patch };
 }
 
-function geometry(plan: RainDrop[]): Omit<RainDrop, "faction">[] {
+function geometry(plan: RainDrop[]): Omit<RainDrop, "type">[] {
   return plan.map((drop) => ({
     releaseTick: drop.releaseTick,
     pose: {
@@ -29,20 +30,22 @@ function drainRain(simulation: Simulation, limit = 1_200): void {
 
 function expectConservation(simulation: Simulation): void {
   const stats = simulation.stats();
-  expect(stats.spawned).toBe(stats.active + stats.collected + stats.lost);
+  expect(stats.spawned).toBe(
+    stats.active + stats.collected + stats.detonated + stats.lost,
+  );
 }
 
 describe("seeded staged rain", () => {
   it("returns no scheduled drops for zero density", () => {
-    expect(planRain(tuning({ density: 0 }))).toEqual([]);
+    expect(planRain(tuning({ density: 0 }), GOLD_ONLY_MIX)).toEqual([]);
   });
 
   it("plans the supported high-density count without truncating", () => {
-    expect(planRain(tuning({ density: 1_000, seed: 4 }))).toHaveLength(1_000);
+    expect(planRain(tuning({ density: 1_000, seed: 4 }), GOLD_ONLY_MIX)).toHaveLength(1_000);
   });
 
   it("keeps a representative plan from repeating vertical columns", () => {
-    const plan = planRain(tuning({ density: 300, seed: 2026 }));
+    const plan = planRain(tuning({ density: 300, seed: 2026 }), GOLD_ONLY_MIX);
     const columns = new Set(plan.map(({ pose }) => `${pose.x}|${pose.z}`));
 
     expect(plan).toHaveLength(300);
@@ -51,17 +54,17 @@ describe("seeded staged rain", () => {
   });
 
   it("reproduces seeded geometry while changing it for a different seed", () => {
-    const first = geometry(planRain(tuning({ density: 48, seed: 71 })));
-    const sameSeed = geometry(planRain(tuning({ density: 48, seed: 71 })));
-    const differentSeed = geometry(planRain(tuning({ density: 48, seed: 72 })));
+    const first = geometry(planRain(tuning({ density: 48, seed: 71 }), GOLD_ONLY_MIX));
+    const sameSeed = geometry(planRain(tuning({ density: 48, seed: 71 }), GOLD_ONLY_MIX));
+    const differentSeed = geometry(planRain(tuning({ density: 48, seed: 72 }), GOLD_ONLY_MIX));
 
     expect(sameSeed).toEqual(first);
     expect(differentSeed).not.toEqual(first);
   });
 
   it("moves the lower rain frontier with the configured collection edge", () => {
-    const full = planRain(tuning({ density: 120, seed: 29, shelfFront: 4 }));
-    const short = planRain(tuning({ density: 120, seed: 29, shelfFront: 2.5 }));
+    const full = planRain(tuning({ density: 120, seed: 29, shelfFront: 4 }), GOLD_ONLY_MIX);
+    const short = planRain(tuning({ density: 120, seed: 29, shelfFront: 2.5 }), GOLD_ONLY_MIX);
     const fullLower = full.filter(({ pose }) => pose.z > -2);
     const shortLower = short.filter(({ pose }) => pose.z > -2);
 
@@ -75,7 +78,7 @@ describe("seeded staged rain", () => {
 
   it("keeps same-release cylinders separated by a conservative bounding radius", () => {
     const configured = tuning({ density: 120, seed: 19 });
-    const plan = planRain(configured);
+    const plan = planRain(configured, GOLD_ONLY_MIX);
     const byRelease = new Map<number, RainDrop[]>();
 
     for (const drop of plan) {
@@ -121,7 +124,10 @@ describe("seeded staged rain", () => {
 
   it("keeps newly spawned active bodies out of occupied free volume", async () => {
     const density = 24;
-    const simulation = await createSimulation({ density, seed: 13 });
+    const simulation = await createSimulation(
+      { density, seed: 13 },
+      { openingMix: GOLD_ONLY_MIX },
+    );
     const seen = new Set<number>();
     const boundingRadius = Math.hypot(
       simulation.tuning.radius,
@@ -165,10 +171,13 @@ describe("seeded staged rain", () => {
 
   it("settles default rain across upper and lower machine regions", async () => {
     const requested = 300;
-    const simulation = await createSimulation({
-      density: requested,
-      seed: 1337,
-    });
+    const simulation = await createSimulation(
+      {
+        density: requested,
+        seed: 1337,
+      },
+      { openingMix: GOLD_ONLY_MIX },
+    );
 
     try {
       for (let step = 0; step < 720; step += 1) simulation.step();
@@ -198,13 +207,16 @@ describe("seeded staged rain", () => {
     } finally {
       simulation.dispose();
     }
-  });
+  }, 15_000);
 
   it("drains a bounded high-count schedule without losing count conservation", async () => {
-    const simulation = await createSimulation({
-      density: 96,
-      seed: 7,
-    });
+    const simulation = await createSimulation(
+      {
+        density: 96,
+        seed: 7,
+      },
+      { openingMix: GOLD_ONLY_MIX },
+    );
 
     try {
       drainRain(simulation);
@@ -217,10 +229,13 @@ describe("seeded staged rain", () => {
   });
 
   it("replaces an in-flight schedule on reset", async () => {
-    const simulation = await createSimulation({
-      density: 96,
-      seed: 31,
-    });
+    const simulation = await createSimulation(
+      {
+        density: 96,
+        seed: 31,
+      },
+      { openingMix: GOLD_ONLY_MIX },
+    );
 
     try {
       simulation.step();

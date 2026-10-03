@@ -1,6 +1,7 @@
+import { COIN_TYPES } from "../contracts";
 import type {
-  CoinFaction,
-  CollectionEvent,
+  CoinType,
+  CoinEvent,
   CoinView,
   Quaternion,
   Vec3,
@@ -10,21 +11,27 @@ export interface LifecycleStats {
   active: number;
   spawned: number;
   collected: number;
-  allyCollected: number;
-  enemyCollected: number;
-  dudCollected: number;
+  collectedByType: Record<CoinType, number>;
+  detonated: number;
   lost: number;
 }
 
+type LossReason = Extract<CoinEvent, { kind: "lost" }>["reason"];
+type Resolution =
+  | { kind: "collected" }
+  | { kind: "lost"; reason: LossReason }
+  | { kind: "detonated"; chainRootId: number | null; blastAssociated: boolean };
+
 export class CoinLifecycle {
   private readonly activeCoins = new Map<number, CoinView>();
-  private readonly events: CollectionEvent[] = [];
+  private readonly events: CoinEvent[] = [];
   private nextId = 1;
   private spawnedCount = 0;
   private collectedCount = 0;
-  private allyCollectedCount = 0;
-  private enemyCollectedCount = 0;
-  private dudCollectedCount = 0;
+  private readonly collectedCounts: Record<CoinType, number> = {
+    gold: 0, diamond: 0, sword: 0, skull: 0, potion: 0, bomb: 0,
+  };
+  private detonatedCount = 0;
   private lostCount = 0;
 
   get coins(): ReadonlyMap<number, CoinView> {
@@ -43,16 +50,12 @@ export class CoinLifecycle {
     return this.collectedCount;
   }
 
-  get allyCollected(): number {
-    return this.allyCollectedCount;
+  get collectedByType(): Record<CoinType, number> {
+    return { ...this.collectedCounts };
   }
 
-  get enemyCollected(): number {
-    return this.enemyCollectedCount;
-  }
-
-  get dudCollected(): number {
-    return this.dudCollectedCount;
+  get detonated(): number {
+    return this.detonatedCount;
   }
 
   get lost(): number {
@@ -64,10 +67,16 @@ export class CoinLifecycle {
     this.events.length = 0;
     this.spawnedCount = 0;
     this.collectedCount = 0;
-    this.allyCollectedCount = 0;
-    this.enemyCollectedCount = 0;
-    this.dudCollectedCount = 0;
+    for (const type of COIN_TYPES) this.collectedCounts[type] = 0;
+    this.detonatedCount = 0;
     this.lostCount = 0;
+  }
+
+  /** Shared physical identity sequence; resetting an encounter never reuses IDs. */
+  allocateId(): number {
+    const id = this.nextId;
+    this.nextId += 1;
+    return id;
   }
 
   spawn(
@@ -75,13 +84,13 @@ export class CoinLifecycle {
     rotation: Quaternion,
     radius: number,
     thickness: number,
-    faction: CoinFaction = "ally",
+    type: CoinType = "sword",
   ): CoinView {
-    const id = this.nextId;
-    this.nextId += 1;
+    const id = this.allocateId();
     const coin: CoinView = {
       id,
-      faction,
+      type,
+      bombHits: 0,
       position: { x: position.x, y: position.y, z: position.z },
       rotation: {
         x: rotation.x,
@@ -111,14 +120,28 @@ export class CoinLifecycle {
   }
 
   collect(id: number, position?: Vec3): boolean {
-    return this.resolve(id, "collected", position);
+    return this.resolve(id, { kind: "collected" }, position);
   }
 
-  lose(id: number, position?: Vec3): boolean {
-    return this.resolve(id, "lost", position);
+  lose(id: number, reason: LossReason, position?: Vec3): boolean {
+    return this.resolve(id, { kind: "lost", reason }, position);
   }
 
-  drainEvents(): CollectionEvent[] {
+  detonate(
+    id: number,
+    chainRootId: number | null,
+    blastAssociated: boolean,
+    position?: Vec3,
+  ): boolean {
+    if (this.activeCoins.get(id)?.type !== "bomb") return false;
+    return this.resolve(
+      id,
+      { kind: "detonated", chainRootId, blastAssociated },
+      position,
+    );
+  }
+
+  drainEvents(): CoinEvent[] {
     if (this.events.length === 0) return [];
     const drained = this.events.splice(0, this.events.length);
     return drained;
@@ -129,32 +152,31 @@ export class CoinLifecycle {
       active: this.activeCoins.size,
       spawned: this.spawnedCount,
       collected: this.collectedCount,
-      allyCollected: this.allyCollectedCount,
-      enemyCollected: this.enemyCollectedCount,
-      dudCollected: this.dudCollectedCount,
+      collectedByType: this.collectedByType,
+      detonated: this.detonatedCount,
       lost: this.lostCount,
     };
   }
 
   private resolve(
     id: number,
-    kind: CollectionEvent["kind"],
+    resolution: Resolution,
     position?: Vec3,
   ): boolean {
     const coin = this.activeCoins.get(id);
     if (!coin) return false;
     const eventPosition = position ?? coin.position;
     this.activeCoins.delete(id);
-    if (kind === "collected") {
+    if (resolution.kind === "collected") {
       this.collectedCount += 1;
-      if (coin.faction === "enemy") this.enemyCollectedCount += 1;
-      else if (coin.faction === "dud") this.dudCollectedCount += 1;
-      else this.allyCollectedCount += 1;
+      this.collectedCounts[coin.type] += 1;
+    } else if (resolution.kind === "detonated") {
+      this.detonatedCount += 1;
     } else this.lostCount += 1;
     this.events.push({
       id,
-      kind,
-      faction: coin.faction,
+      ...resolution,
+      type: coin.type,
       position: {
         x: eventPosition.x,
         y: eventPosition.y,

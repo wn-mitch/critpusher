@@ -1,0 +1,188 @@
+@layer components {
+  .run-panel {
+    @apply col-start-1 row-start-3 min-w-0 border-t border-line py-4;
+  }
+  .run-panel.is-docked {
+    @apply col-auto row-auto flex min-h-0 flex-col border-0 bg-paper p-3;
+  }
+  .run-panel.is-docked > h2 {
+    @apply mb-1 shrink-0 text-lg;
+  }
+  .is-docked .run-content {
+    @apply relative min-h-0 overflow-y-auto pr-1;
+    scrollbar-gutter: stable;
+  }
+  .shop-navigation {
+    @apply grid shrink-0 grid-cols-2 gap-2 border-t border-line pt-2;
+  }
+  .shop-navigation:empty {
+    @apply hidden;
+  }
+  .run-panel .shop-navigation button {
+    @apply min-w-0 px-2 leading-tight;
+  }
+  .shop-owned summary,
+  .shop-properties summary {
+    @apply min-h-control cursor-pointer content-center py-2 text-sm font-semibold;
+  }
+  .shop-owned summary:focus-visible,
+  .shop-properties summary:focus-visible,
+  .purchase-heading:focus-visible {
+    @apply outline-3 -outline-offset-3 outline-focus;
+  }
+  .shop-owned .run-build {
+    @apply mt-0;
+  }
+  .game-layout:has(.starter-choices) .combat-host {
+    display: none;
+  }
+  .game-layout:has(.starter-choices) .run-panel {
+    grid-row: 1;
+    border-top: 0;
+    padding-top: 0;
+  }
+  .run-panel h2 {
+    @apply m-0 mb-3 text-xl font-bold text-petrol-deep;
+  }
+  .run-panel h3 {
+    @apply m-0 text-base font-bold;
+  }
+  .run-panel p {
+    @apply my-2 max-w-prose text-sm;
+  }
+  .run-panel button {
+    @apply px-4 py-2 text-sm font-semibold;
+  }
+  .run-panel .run-primary {
+    @apply border-petrol-deep bg-petrol text-paper-high;
+  }
+  .run-panel .run-primary:hover:not(:disabled) {
+    @apply bg-petrol-deep;
+  }
+  .starter-choices {
+    @apply mt-4 grid grid-cols-3 gap-4;
+  }
+  .starter-choice {
+    @apply flex min-w-0 min-h-[14rem] flex-col items-start rounded-sm border border-line bg-paper-high/55 p-4;
+  }
+  .starter-choice h3 {
+    @apply text-lg text-cabinet-deep;
+  }
+  .starter-choice button {
+    @apply mt-auto w-full;
+  }
+  .starter-choice .tradeoff {
+    @apply mb-4 text-ink-soft;
+  }
+  .bag-counts,
+  .shop-balance {
+    @apply font-semibold tabular-nums;
+  }
+  .sticker-label {
+    @apply font-semibold text-petrol-deep;
+  }
+  .run-build {
+    @apply my-4 border-y border-line py-2;
+  }
+  .run-bags {
+    @apply m-0 grid list-none gap-1 p-0 text-sm;
+  }
+  .shop-selection {
+    @apply my-3 grid grid-cols-1 gap-2;
+  }
+  .shop-selection label {
+    @apply grid min-w-0 gap-1 text-sm font-semibold;
+  }
+  .shop-selection select {
+    @apply min-h-control w-full min-w-0 rounded-sm border border-line-strong bg-paper-high px-3 text-sm text-ink;
+  }
+  .shop-offers {
+    @apply grid grid-cols-2 gap-x-2 gap-y-3;
+  }
+  .shop-offer {
+    @apply grid min-w-0 content-start;
+    grid-template-rows: auto 1fr;
+  }
+  .shop-offer button {
+    @apply flex h-full w-full items-center gap-2 px-2 py-2 text-left;
+  }
+  .shop-offer button[aria-pressed="true"] {
+    @apply border-petrol-deep bg-petrol text-paper-high;
+  }
+  .shop-offer p {
+    @apply my-1 text-xs leading-snug text-ink-soft;
+  }
+  .shop-offer-label {
+    @apply min-w-0 leading-tight;
+  }
+  .shop-offer-price {
+    @apply mt-1 block text-xs font-normal;
+  }
+  .offer-icon,
+  .bag-token-icon {
+    @apply relative inline-flex size-8 shrink-0 items-center justify-center rounded-sm bg-cabinet-deep p-1 text-brass-light;
+  }
+  .offer-icon svg,
+  .bag-token-icon svg {
+    @apply block size-full;
+    --coin-symbol-cutout: var(--color-cabinet-deep);
+  }
+  .offer-icon-upgrade {
+    @apply absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-brass-light text-sm font-bold text-ink;
+  }
+  .purchase-heading {
+    @apply flex items-center gap-2;
+  }
+  .feed-comparison {
+    @apply my-3 grid gap-2;
+  }
+  .bag-preview {
+    @apply flex flex-wrap items-center gap-x-3 gap-y-1 text-xs;
+  }
+  .bag-preview-label {
+    @apply w-full font-bold text-petrol-deep;
+  }
+  .bag-token {
+    @apply inline-flex items-center gap-1 tabular-nums;
+  }
+  .bag-token-icon {
+    @apply size-6;
+  }
+  .effect-comparison {
+    @apply font-semibold;
+  }
+  .purchase-preview {
+    @apply my-4 border-y border-line bg-paper-high p-3;
+  }
+  .run-notice {
+    @apply shrink-0 text-petrol-deep;
+  }
+  .run-notice:empty {
+    @apply hidden;
+  }
+  .run-stickers {
+    @apply col-span-full row-start-8 m-0 flex h-[1lh] list-none flex-wrap gap-x-3 gap-y-1 overflow-y-auto p-0 text-xs text-petrol-deep;
+  }
+  .combo-readout {
+    @apply col-span-full row-start-7 m-0 h-[1lh] overflow-y-auto text-xs font-semibold text-petrol-deep tabular-nums;
+  }
+  @media (max-width: 42rem) {
+    .run-stickers,
+    .combo-readout {
+      @apply h-[2lh];
+    }
+    .is-docked {
+      max-height: 36rem;
+    }
+    .starter-choices,
+    .shop-selection {
+      @apply grid-cols-1;
+    }
+    .starter-choice {
+      @apply gap-1;
+    }
+    .starter-choice button {
+      @apply mt-2;
+    }
+  }
+}

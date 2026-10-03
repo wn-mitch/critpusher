@@ -6,6 +6,11 @@ import type {
   SimulationStats,
   Tuning,
 } from "./contracts";
+import type {
+  Encounter,
+  EncounterSnapshot,
+  EncounterStep,
+} from "./combat/types";
 import {
   createChuteLayout,
   DEFAULT_CHUTES,
@@ -13,47 +18,22 @@ import {
   type ChuteSettings,
 } from "./chutes";
 import { createAudioEngine } from "./audio";
+import { createRun } from "./run/run";
+import type { Run, RunSnapshot, StarterId, PurchaseRequest, PurchaseResult } from "./run/types";
+import { exposeDevApi, type PerformanceReadings } from "./runtime/dev";
 import { createPlacementProbe, type PlacementProbe } from "./experiments/panel";
-import { createCollectionBurstTracker } from "./feedback/cascade";
-import { createDropSequence } from "./feedback/drop-sequence";
+import { createCollectionBurstTracker, createCombatBurstTracker } from "./feedback/cascade";
 import { createPresentation } from "./presentation";
-import { createSimulation, DEFAULT_TUNING } from "./simulation";
+import { DEFAULT_TUNING } from "./simulation";
+import { MACHINE_GEOMETRY } from "./machine-geometry";
 import { bindControls, createAppUi, type InputController } from "./ui";
 
 const FIXED_STEP_SECONDS = 1 / 60;
 const MAX_STEPS_PER_FRAME = 6;
 const MAX_FRAME_SECONDS = 0.25;
-const CHUTE_LIMIT = 4.4;
+const CHUTE_LIMIT = MACHINE_GEOMETRY.aimHalfWidth;
 const UI_UPDATE_INTERVAL_MS = 200;
 
-interface PerformanceReadings {
-  fps: number;
-  renderMs: number;
-  frameMs: number;
-  cascadeMs: number;
-  droppedSteps: number;
-}
-
-interface CritpusherSnapshot extends SimulationStats, PerformanceReadings {
-  paused: boolean;
-  tuning: Tuning;
-  chutes: ChuteSettings;
-  remainingDrops: number;
-}
-
-interface CritpusherDevApi {
-  simulation: Simulation;
-  snapshot(): CritpusherSnapshot;
-  reset(tuning?: Partial<Tuning>): void;
-  setPaused(value: boolean): void;
-  drop(x?: number): boolean;
-}
-
-declare global {
-  interface Window {
-    __critpusher?: CritpusherDevApi;
-  }
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -63,6 +43,8 @@ const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Critpusher cannot start because #app is missing.");
 
 const audio = createAudioEngine();
+let encounter: Encounter | undefined;
+let run: Run | undefined;
 let simulation: Simulation | undefined;
 let presentation: Presentation | undefined;
 let input: InputController | undefined;
@@ -73,10 +55,6 @@ let simulationClock = 0;
 let accumulator = 0;
 let chuteX = 0;
 let chuteSettings: ChuteSettings = { ...DEFAULT_CHUTES };
-let chuteLayout = createChuteLayout(chuteSettings, DEFAULT_TUNING, chuteX);
-let releaseLayout = chuteLayout.slice().sort((a, b) => a.x - b.x);
-let activeReleaseLayout = releaseLayout;
-const dropSequence = createDropSequence();
 let userPaused = false;
 let hidden = document.hidden;
 let reducedMotion = window.matchMedia(
@@ -86,7 +64,10 @@ let soundWanted = true;
 let armPromise: Promise<void> | undefined;
 let deferredReleaseGeneration = 0;
 let lastUiUpdate = 0;
+let lastUiPhase = "";
 const collectionBursts = createCollectionBurstTracker();
+const combatBursts = createCombatBurstTracker();
+let lastReleaseKey = "";
 let disposed = false;
 
 const performanceReadings: PerformanceReadings = {
@@ -104,20 +85,18 @@ const ui = createAppUi(root, {
   callbacks: {
     onPauseChange: (paused) => setPaused(paused),
     onSoundChange: (enabled) => setSound(enabled),
-    onRestart: (tuning) => reset(tuning),
+    onRestart: reset,
+    onChooseStarter: chooseStarter,
+    onPreviewPurchase: (request) => {
+      if (!run) throw new Error("Run is not ready.");
+      return run.previewPurchase(request);
+    },
+    onPurchase: purchase,
+    onContinueRun: continueRun,
     onLiveTuningChange: (patch) => {
-      if (!simulation) return;
-      simulation.configure(patch);
-      const { coinWeight, friction, stroke, period, dropHeight, dropRate } =
-        simulation.tuning;
-      ui.setTuning({
-        coinWeight,
-        friction,
-        stroke,
-        period,
-        dropHeight,
-        dropRate,
-      });
+      if (!run) return;
+      run.setTuning(patch);
+      syncChutes(chuteX);
       renderPausedState();
     },
     onChuteSettingsChange: (settings) => {
@@ -205,35 +184,34 @@ function runAudioLifecycle(operation: Promise<void>): void {
 
 function setPaused(paused: boolean): void {
   userPaused = paused;
-  if (paused) {
-    deferredReleaseGeneration += 1;
-    dropSequence.cancel();
-  }
+  const effectivePaused = isPaused();
+  if (effectivePaused) deferredReleaseGeneration += 1;
+  run?.setPaused(effectivePaused);
   resetClock();
   input?.cancelRepeats();
-  ui.setPaused(paused);
-  ui.setRhythm(paused ? "Paused" : "Ready", false);
-  ui.setStatus(paused ? "Machine paused." : "Machine running.");
-  runAudioLifecycle(audio.setPaused(isPaused()));
-  renderPausedState(true);
+  ui.setPaused(effectivePaused);
+  ui.setRhythm(effectivePaused ? "Paused" : "Ready", false);
+  ui.setStatus(effectivePaused ? "Machine paused." : "Machine running.");
+  runAudioLifecycle(audio.setPaused(effectivePaused));
+  if (effectivePaused) renderPausedState(true);
+  else if (simulation) updateUi(simulation.stats(), performance.now(), true);
 }
 
 function renderPausedState(forceUi = false): void {
-  if (!userPaused || hidden || !simulation || !presentation) return;
-  const stats = simulation.stats();
-  const renderStarted = performance.now();
-  presentation.render(simulation, 0, reducedMotion, chuteLayout);
-  performanceReadings.renderMs = performance.now() - renderStarted;
-  updateUi(stats, performance.now(), forceUi);
+  if (isPaused()) renderFrozenState(forceUi);
 }
 
 function syncChutes(requestedX: number): void {
   const tuning = simulation?.tuning ?? DEFAULT_TUNING;
   chuteSettings = sanitizeChutes(chuteSettings, tuning);
-  chuteLayout = createChuteLayout(chuteSettings, tuning, requestedX);
-  // Left-to-right body insertion keeps playable releases aligned with trials.
-  releaseLayout = chuteLayout.slice().sort((a, b) => a.x - b.x);
-  chuteX = chuteLayout[0]!.x;
+  const layout = createChuteLayout(
+    encounter?.snapshot().chuteSlots ?? [],
+    tuning,
+    requestedX,
+    chuteSettings.chuteSpacing,
+  );
+  chuteX = layout[0]?.x ?? 0;
+  encounter?.setAim(chuteX, chuteSettings);
   ui.elements.aim.value = String(chuteX / CHUTE_LIMIT);
   ui.setChuteSettings(chuteSettings, tuning.radius);
 }
@@ -254,65 +232,93 @@ function setAimFromPointer(clientX: number, clientY: number): void {
 }
 
 function drop(x = chuteX): boolean {
-  if (!simulation || isPaused() || dropSequence.remaining > 0) return false;
-  const tick = Math.round(simulationClock / FIXED_STEP_SECONDS);
+  if (!run || isPaused()) return false;
   if (x !== chuteX) syncChutes(x);
-  activeReleaseLayout = releaseLayout;
-  return dropSequence.start(
-    chuteSettings.dropsPerAction,
-    Math.ceil(chuteSettings.dropDelay / FIXED_STEP_SECONDS),
-    tick,
-    releaseSingle,
-  );
-}
-
-function releaseSingle(): boolean {
-  if (!simulation || isPaused()) return false;
-  const accepted = simulation.releaseChutes(activeReleaseLayout, 0) !== null;
+  const accepted = run.drop(chuteX, chuteSettings);
   if (accepted) {
-    const total = activeReleaseLayout.length;
-    const queued = dropSequence.remaining - 1;
+    const queued = run.encounter.snapshot().remainingRounds;
     ui.setRhythm(
-      `${total} coins released${queued > 0 ? `; ${queued} coins per chute queued` : ""}`,
+      `Release accepted${queued > 0 ? `; ${queued} coins per chute queued` : ""}`,
       true,
     );
-    if (audio.armed) audio.release();
-    else {
-      const releaseGeneration = deferredReleaseGeneration;
-      void armAudio()
-        .then(() => {
-          if (releaseGeneration === deferredReleaseGeneration) audio.release();
-        })
-        .catch(() => {
-          // armAudio surfaces the actionable error in the app before rejecting.
-        });
-    }
+    playReleaseFeedback(run.encounter.snapshot().lastAdmission);
   } else {
-    ui.setRhythm("Release blocked; sequence stopped", false);
+    ui.setRhythm("Release blocked", false);
   }
   return accepted;
 }
 
-function reset(tuning?: Partial<Tuning>): void {
-  if (!simulation) return;
+function playReleaseFeedback(admission: EncounterSnapshot["lastAdmission"]): void {
+  if (!admission) return;
+  const key = `${admission.action}/${admission.round}`;
+  if (key === lastReleaseKey) return;
+  lastReleaseKey = key;
+  if (audio.armed) audio.release();
+  else {
+    const generation = deferredReleaseGeneration;
+    void armAudio().then(() => {
+      if (generation === deferredReleaseGeneration) audio.release();
+    }).catch(() => {
+      // armAudio reports its error in the app.
+    });
+  }
+}
+
+function freshWorld(): void {
+  if (!run || !simulation || !presentation) return;
   input?.cancelRepeats();
-  dropSequence.cancel();
-  simulation.reset(tuning);
   deferredReleaseGeneration += 1;
+  lastReleaseKey = "";
   collectionBursts.reset();
+  combatBursts.reset();
+  presentation.clearEffects();
+  lastUiPhase = "";
   simulationClock = 0;
   audio.reset();
-  placementProbe?.reset();
-  ui.setTuning(simulation.tuning);
-  syncChutes(chuteX);
+  placementProbe?.dispose();
+  placementProbe = createPlacementProbe({
+    host: ui.elements.tuningPanel, simulation, presentation, onChange: renderPausedState,
+  });
+  ui.elements.combatCues.textContent = "";
+  ui.setFeedback("");
+  ui.setError(null);
+  syncChutes(0);
   performanceReadings.droppedSteps = 0;
   performanceReadings.cascadeMs = 0;
   resetClock();
-  ui.setFeedback("Pile reseeded.");
-  ui.setRhythm("Ready", false);
-  ui.setStatus(`Pile ready with ${simulation.tuning.density} coins.`);
-  updateUi(simulation.stats(), performance.now(), true);
-  renderPausedState();
+  renderFrozenState(true);
+}
+
+function reset(tuning?: Partial<Tuning>): void {
+  if (tuning) ui.setTuning(tuning);
+  if (!run) return;
+  if (tuning) run.setTuning(tuning);
+  run.restart(tuning?.seed);
+  run.setPaused(isPaused());
+  freshWorld();
+}
+
+function chooseStarter(id: StarterId): boolean {
+  if (!run) return false;
+  const accepted = run.chooseStarter(id);
+  if (accepted) freshWorld();
+  else renderFrozenState(true);
+  return accepted;
+}
+
+function continueRun(): boolean {
+  if (!run) return false;
+  const accepted = run.continueRun();
+  if (accepted) freshWorld();
+  else renderFrozenState(true);
+  return accepted;
+}
+
+function purchase(request: PurchaseRequest): PurchaseResult {
+  if (!run) throw new Error("Run is not ready.");
+  const result = run.purchase(request);
+  renderFrozenState(true);
+  return result;
 }
 
 function recordDroppedDebt(seconds: number): void {
@@ -333,31 +339,98 @@ function updateUi(
   lastUiUpdate = timestamp;
   ui.updateStats(stats);
   ui.updateMetrics(stats, performanceReadings);
+  if (run) {
+    const snapshot = run.snapshot();
+    const phase = `${snapshot.phase}/${snapshot.encounter.phase}/${snapshot.encounter.waveIndex}`;
+    if (phase !== lastUiPhase) {
+      lastUiPhase = phase;
+      const messages: Record<RunSnapshot["phase"], string> = {
+        starter: "Choose a kit above the cabinet. Combat begins with the opening rain.",
+        encounter: snapshot.encounter.phase === "loading" ? "Opening pile settling; catches and impacts are live." : "Read the front target, aim, and release.",
+        shop: "Victory. Recovery and payout applied. Review your next build in the machine shop.",
+        won: "All encounters cleared. Start a new run with another kit.",
+        lost: "Run ended. Start a new run with another kit.",
+        error: snapshot.error ?? "Run unavailable. Restart to try again.",
+      };
+      ui.setStatus(messages[snapshot.phase]);
+      if (snapshot.phase !== "encounter") {
+        input?.cancelRepeats();
+        deferredReleaseGeneration += 1;
+      }
+    }
+    ui.updateEncounter(snapshot.encounter, encounter?.preview() ?? []);
+    ui.updateRun(snapshot);
+    presentation?.setStickers(snapshot.stickers);
+    if (snapshot.error) ui.setError(snapshot.error);
+  }
 }
 
-function processStepEvents(): void {
+function encounterIsFrozen(): boolean {
+  const snapshot = run?.snapshot();
+  return !snapshot || snapshot.phase !== "encounter" || snapshot.encounter.phase === "error";
+}
+
+function processStepEvents(step: EncounterStep): void {
+  for (const admission of step.admissions) {
+    if (admission.newRound) playReleaseFeedback(admission);
+  }
   if (!simulation || !presentation) return;
-  const events = simulation.drainEvents();
+  const events = step.events;
   const burst = collectionBursts.collect(events, simulationClock);
-  if (events.length === 0) return;
+  for (const event of step.gizmoEvents) {
+    ui.setFeedback(event.kind === "collected"
+      ? `Bell collected: +${event.currency} currency. Combo stays active; bell returns next encounter.`
+      : "Bell lost. Combo stays active; bell returns next encounter.");
+  }
+  const combatBurst = combatBursts.collect(step.combat, simulationClock);
+  if (events.length === 0) {
+    if (step.admissions.length > 0) ui.setRhythm("Release admitted", true);
+    return;
+  }
 
   const cascadeStarted = performance.now();
-  presentation.collect(events, reducedMotion);
+  presentation.collect(events, reducedMotion, step.combat);
   placementProbe?.collect(events);
   audio.collect(events, burst ?? undefined);
-  if (burst) {
-    ui.setFeedback(
-      `${burst.total} coin${burst.total === 1 ? "" : "s"} collected.`,
-    );
+  audio.combat(step.combat);
+  ui.showCombat(step.combat);
+  if (combatBurst) {
+    const labels = [
+      combatBurst.outgoingDamage > 0 ? `Enemy −${combatBurst.outgoingDamage}` : "",
+      combatBurst.incomingDamage > 0 ? `Player −${combatBurst.incomingDamage}` : "",
+      combatBurst.healingUsed > 0 ? `Heal +${combatBurst.healingUsed}` : "",
+      combatBurst.currency > 0 ? `Currency +${combatBurst.currency}` : "",
+    ].filter(Boolean);
+    ui.setFeedback(labels.join(" · "));
   }
   performanceReadings.cascadeMs += performance.now() - cascadeStarted;
 }
 
+function advanceEncounterStep(): EncounterStep {
+  if (!run) throw new Error("Run is not ready.");
+  const step = run.step();
+  simulationClock = run.simulation.stats().time;
+  processStepEvents(step);
+  return step;
+}
+
+function renderFrozenState(forceUi = false): void {
+  if (!simulation || !presentation) return;
+  const stats = simulation.stats();
+  const renderStarted = performance.now();
+  presentation.render(simulation, 0, reducedMotion, encounter?.preview() ?? []);
+  performanceReadings.renderMs = performance.now() - renderStarted;
+  updateUi(stats, performance.now(), forceUi);
+}
+
 function frame(timestamp: number): void {
-  if (disposed || !simulation || !presentation) return;
+  if (disposed || !encounter || !simulation || !presentation) return;
   frameRequest = requestAnimationFrame(frame);
-  if (isPaused()) {
+  if (isPaused() || encounterIsFrozen()) {
     resetClock();
+    input?.cancelRepeats();
+    if (isPaused()) renderPausedState(true);
+    if (encounterIsFrozen()) renderFrozenState(true);
     return;
   }
 
@@ -373,15 +446,14 @@ function frame(timestamp: number): void {
 
   let steps = 0;
   while (accumulator >= FIXED_STEP_SECONDS && steps < MAX_STEPS_PER_FRAME) {
-    dropSequence.advance(
-      Math.round(simulationClock / FIXED_STEP_SECONDS),
-      releaseSingle,
-    );
-    simulation.step();
-    simulationClock += FIXED_STEP_SECONDS;
-    processStepEvents();
+    advanceEncounterStep();
     accumulator -= FIXED_STEP_SECONDS;
     steps += 1;
+    if (encounterIsFrozen()) {
+      input?.cancelRepeats();
+      accumulator = 0;
+      break;
+    }
   }
   if (accumulator >= FIXED_STEP_SECONDS) {
     const dropped = Math.floor(accumulator / FIXED_STEP_SECONDS);
@@ -395,7 +467,7 @@ function frame(timestamp: number): void {
   const stats = simulation.stats();
   audio.update(stats);
   const renderStarted = performance.now();
-  presentation.render(simulation, frameSeconds, reducedMotion, chuteLayout);
+  presentation.render(simulation, frameSeconds, reducedMotion, encounter.preview());
   performanceReadings.renderMs = performance.now() - renderStarted;
   updateUi(stats, timestamp);
   performanceReadings.frameMs = performance.now() - frameStarted;
@@ -403,19 +475,12 @@ function frame(timestamp: number): void {
 
 function onVisibilityChange(): void {
   hidden = document.hidden;
-  if (hidden) {
-    deferredReleaseGeneration += 1;
-    dropSequence.cancel();
-  }
+  if (hidden) deferredReleaseGeneration += 1;
   resetClock();
   input?.cancelRepeats();
   runAudioLifecycle(audio.setHidden(hidden));
-  if (!hidden) {
-    ui.setPaused(userPaused);
-    ui.setRhythm(userPaused ? "Paused" : "Ready", false);
-    ui.setStatus(userPaused ? "Machine paused." : "Machine running.");
-    renderPausedState();
-  }
+  setPaused(userPaused);
+  if (!hidden) renderPausedState();
 }
 
 function onResize(): void {
@@ -439,40 +504,33 @@ function installGestureArm(): void {
   });
 }
 
-function exposeDevApi(currentSimulation: Simulation): void {
-  if (!import.meta.env.DEV) return;
-  window.__critpusher = {
-    simulation: currentSimulation,
-    snapshot: () => ({
-      ...currentSimulation.stats(),
-      paused: isPaused(),
-      fps: performanceReadings.fps,
-      renderMs: performanceReadings.renderMs,
-      frameMs: performanceReadings.frameMs,
-      cascadeMs: performanceReadings.cascadeMs,
-      droppedSteps: performanceReadings.droppedSteps,
-      tuning: { ...currentSimulation.tuning },
-      chutes: { ...chuteSettings },
-      remainingDrops: dropSequence.remaining,
-    }),
-    reset,
-    setPaused,
-    drop,
-  };
+
+function developerStep(): EncounterStep {
+  if (!encounter) throw new Error("Encounter is not ready.");
+  const externallyPaused = isPaused();
+  if (externallyPaused) run?.setPaused(false);
+  try {
+    return advanceEncounterStep();
+  } finally {
+    if (externallyPaused) run?.setPaused(true);
+    resetClock();
+    renderFrozenState(true);
+  }
 }
+
 
 async function dispose(): Promise<void> {
   if (disposed) return;
   disposed = true;
   deferredReleaseGeneration += 1;
-  dropSequence.cancel();
+  encounter?.cancelDrops();
   cancelAnimationFrame(frameRequest);
   window.removeEventListener("resize", onResize);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   input?.destroy();
   placementProbe?.dispose();
   presentation?.dispose();
-  simulation?.dispose();
+  run?.dispose();
   ui.destroy();
   delete window.__critpusher;
   await audio.dispose();
@@ -489,20 +547,17 @@ async function start(): Promise<void> {
     installGestureArm();
   }
 
-  presentation = createPresentation(ui.elements.scene);
-  simulation = await createSimulation(ui.getTuning());
-  placementProbe = createPlacementProbe({
-    host: ui.elements.tuningPanel,
-    simulation,
-    presentation,
-    onChange: renderPausedState,
-  });
-  ui.setTuning(simulation.tuning);
+  presentation = await createPresentation(ui.elements.scene);
+  run = await createRun(ui.getTuning());
+  encounter = run.encounter;
+  run.setPaused(isPaused());
+  simulation = run.simulation;
+  freshWorld();
   syncChutes(chuteX);
   ui.setLoading(false);
   ui.setError(null);
-  ui.setStatus(`Pile ready with ${simulation.tuning.density} coins.`);
-  ui.setRhythm("Ready", false);
+  ui.setStatus("Choose a kit above the cabinet. Combat begins with the opening rain.");
+  ui.setRhythm("Choose a kit", false);
   input = bindControls({
     canvas: presentation.canvas,
     dropButton: ui.elements.drop,
@@ -520,7 +575,10 @@ async function start(): Promise<void> {
       onDrop: () => drop(),
       onAim: setAim,
       onPause: () => setPaused(!userPaused),
-      onReset: () => reset(ui.getTuning()),
+      onReset: () => {
+        try { reset(); }
+        catch (error) { ui.setError(errorMessage(error)); }
+      },
     },
   });
   window.addEventListener("resize", onResize);
@@ -530,15 +588,27 @@ async function start(): Promise<void> {
     () => void dispose().catch((error) => console.error(error)),
     { once: true },
   );
-  exposeDevApi(simulation);
+  if (import.meta.env.DEV) exposeDevApi(run, {
+    paused: isPaused, chutes: () => chuteSettings, performance: performanceReadings,
+    reset, setPaused, step: developerStep, drop, chooseStarter, purchase, continueRun,
+  });
   presentation.resize();
   frameRequest = requestAnimationFrame(frame);
 }
 
 void start().catch((error: unknown) => {
   cancelAnimationFrame(frameRequest);
+  presentation?.dispose();
+  run?.dispose();
   ui.setLoading(false);
   ui.setError(`Critpusher could not start: ${errorMessage(error)}`);
   ui.setStatus("Startup failed. Reload after addressing the error above.");
+  ui.setRhythm("Unavailable", false);
+  ui.elements.aim.disabled = true;
+  ui.elements.drop.disabled = true;
+  ui.elements.pause.disabled = true;
+  ui.elements.restart.disabled = true;
+  ui.elements.applyReset.disabled = true;
+  ui.elements.controlHint.textContent = "Reload after resolving the startup error.";
   console.error(error);
 });

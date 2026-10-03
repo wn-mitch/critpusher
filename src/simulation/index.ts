@@ -1,8 +1,16 @@
 import * as RAPIER from "@dimforge/rapier3d-compat";
+import { COIN_TYPES } from "../contracts";
+import { simulationConfig } from "../combat/config";
+import { MACHINE_GEOMETRY } from "../machine-geometry";
+import type { FeedLayout, FeedTray, SimulationConfig } from "../combat/types";
 import type {
-  CoinFaction,
-  CollectionEvent,
+  CoinType,
+  CoinEvent,
   CoinView,
+  GizmoDefinition,
+  GizmoEvent,
+  GizmoView,
+  NativeFeedAdmission,
   Quaternion,
   Simulation,
   SimulationStats,
@@ -18,33 +26,37 @@ import {
   sanitizeTuning,
 } from "./config";
 import { CoinLifecycle } from "./lifecycle";
+import { GizmoLifecycle } from "./gizmo-lifecycle";
 import { planRain, type RainDrop, type RainPose } from "./rain";
-import { RapierWorld } from "./rapier-world";
+import { RapierWorld, type CoinImpact } from "./rapier-world";
 
 export { DEFAULT_TUNING } from "./config";
 
 const MAX_RAIN_SPAWNS_PER_STEP = 12;
 const MAX_RAIN_SCANS_PER_STEP = 96;
 const FIXED_HZ = Math.round(1 / FIXED_DT);
-const INNER_SIDE_WALL_X = 5;
-const INNER_REAR_WALL_Z = -4.05;
-const UPPER_SHELF_Y = 0.6;
-const MACHINE_TOP_Y = 4.5;
+const INNER_SIDE_WALL_X = MACHINE_GEOMETRY.innerHalfWidth;
+const INNER_REAR_WALL_Z = MACHINE_GEOMETRY.innerRearZ;
+const UPPER_SHELF_Y = MACHINE_GEOMETRY.pusherTop;
+const MACHINE_TOP_Y = MACHINE_GEOMETRY.shelfTop + MACHINE_GEOMETRY.wallHeight;
 const SPAWN_GAP = 0.02;
-const COLLECTION_Y = -0.45;
-const LOST_X = 9;
-const LOST_REAR_Z = -8;
-const LOST_FRONT_Z = 12;
+const COLLECTION_Y = MACHINE_GEOMETRY.collectionY;
+const LOST_X = MACHINE_GEOMETRY.lostHalfWidth;
+const LOST_REAR_Z = MACHINE_GEOMETRY.lostRearZ;
+const LOST_FRONT_Z = MACHINE_GEOMETRY.lostFrontZ;
 
 let rapierInitialization: Promise<void> | undefined;
 
 class PusherSimulation implements Simulation {
   readonly tuning: Tuning;
+  readonly config: SimulationConfig;
 
   private world: RapierWorld;
   private coinBoundingRadius: number;
   private coinClearanceSquared: number;
   private readonly lifecycle = new CoinLifecycle();
+  private readonly gizmoLifecycle = new GizmoLifecycle();
+  private readonly feedAdmissions: NativeFeedAdmission[] = [];
   private rain: Array<RainDrop | undefined> = [];
   private rainCursor = 0;
   private pendingRain = 0;
@@ -53,10 +65,12 @@ class PusherSimulation implements Simulation {
   private lastDropTick = Number.NEGATIVE_INFINITY;
   private lastPhysicsMs = 0;
   private sleeping = 0;
+  private bombsActive = false;
   private disposed = false;
 
-  constructor(tuning?: Partial<Tuning>) {
+  constructor(tuning?: Partial<Tuning>, config?: Partial<SimulationConfig>) {
     this.tuning = sanitizeTuning(DEFAULT_TUNING, tuning);
+    this.config = simulationConfig(undefined, config);
     this.coinBoundingRadius = Math.hypot(
       this.tuning.radius,
       this.tuning.thickness / 2,
@@ -64,7 +78,7 @@ class PusherSimulation implements Simulation {
     const coinClearance = this.coinBoundingRadius * 2 + SPAWN_GAP;
     this.coinClearanceSquared = coinClearance * coinClearance;
     this.world = new RapierWorld(this.tuning);
-    this.rain = planRain(this.tuning);
+    this.rain = planRain(this.tuning, this.config.openingMix);
     this.pendingRain = this.rain.length;
   }
 
@@ -72,17 +86,62 @@ class PusherSimulation implements Simulation {
     return this.lifecycle.coins;
   }
 
+  get gizmos(): ReadonlyMap<number, GizmoView> {
+    return this.gizmoLifecycle.gizmos;
+  }
+
+  configureGizmo(definition: GizmoDefinition | null): void {
+    if (!this.disposed && this.simulationTick === 0) this.gizmoLifecycle.configure(definition, this.tuning.seed);
+  }
+
+  drainGizmoEvents(): GizmoEvent[] {
+    return this.gizmoLifecycle.drainEvents();
+  }
+
+  setFeedLayout(layout: readonly FeedLayout[]): void {
+    if (!this.disposed) this.world.feeder.setLayout(layout, this.tuning);
+  }
+
+  feedTrays(): readonly FeedTray[] {
+    return this.world.feeder.feedTrays();
+  }
+
+  releaseFeed(): number[] | null {
+    if (this.disposed || this.tuning.dropRate <= 0) return null;
+    return this.world.releaseFeed(this.admitStock);
+  }
+
+  startFeedBurst(): boolean {
+    return !this.disposed && this.tuning.dropRate > 0 && this.world.startFeedBurst();
+  }
+
+  cancelFeedBurst(): void {
+    this.world.cancelFeedBurst();
+  }
+
+  drainFeedAdmissions(): NativeFeedAdmission[] {
+    return this.feedAdmissions.splice(0);
+  }
+
+  private readonly admitStock = (stock: CoinView): number => this.lifecycle.spawn(
+    stock.position, stock.rotation, stock.radius, stock.thickness, stock.type,
+  ).id;
+
   step(): void {
     if (this.disposed) return;
 
     const startedAt = performance.now();
+    this.spawnGizmo();
     this.spawnRainBatch();
     const nextTime = this.elapsed + FIXED_DT;
     this.world.setPusherTarget(nextTime, this.tuning);
-    this.world.step();
+    const impacts = this.world.step();
+    this.feedAdmissions.push(...this.world.advanceFeedBurst(this.admitStock));
     this.elapsed = nextTime;
     this.simulationTick += 1;
     this.syncCoins();
+    this.world.forEachGizmo(this.syncGizmo);
+    if (this.bombsActive) this.resolveBombImpacts(impacts);
     this.lastPhysicsMs = performance.now() - startedAt;
   }
 
@@ -108,7 +167,7 @@ class PusherSimulation implements Simulation {
   }
 
   releaseChutes(
-    chutes: readonly { x: number; count: number; faction?: CoinFaction }[],
+    chutes: readonly { x: number; count: number; type?: CoinType }[],
     minimumIntervalTicks = Math.ceil(FIXED_HZ / this.tuning.dropRate),
   ): number[] | null {
     if (
@@ -117,30 +176,27 @@ class PusherSimulation implements Simulation {
       !Number.isInteger(minimumIntervalTicks) ||
       minimumIntervalTicks < 0 ||
       chutes.length === 0 ||
-      chutes.length > 5
+      chutes.length > MACHINE_GEOMETRY.maxTrays
     )
       return null;
 
     if (this.simulationTick - this.lastDropTick < minimumIntervalTicks)
       return null;
 
-    const poses: Array<RainPose & { faction: CoinFaction }> = [];
+    const poses: Array<RainPose & { type: CoinType }> = [];
     for (const chute of chutes) {
       if (
         !Number.isFinite(chute.x) ||
         !Number.isInteger(chute.count) ||
         chute.count < 1 ||
         chute.count > 3 ||
-        (chute.faction !== undefined &&
-          chute.faction !== "ally" &&
-          chute.faction !== "enemy" &&
-          chute.faction !== "dud")
+        (chute.type !== undefined && !COIN_TYPES.includes(chute.type))
       )
         return null;
 
       for (let level = 0; level < chute.count; level += 1) {
-        const pose: RainPose & { faction: CoinFaction } = {
-          faction: chute.faction ?? "ally",
+        const pose: RainPose & { type: CoinType } = {
+          type: chute.type ?? "sword",
           x: chute.x,
           y:
             this.tuning.dropHeight +
@@ -172,22 +228,26 @@ class PusherSimulation implements Simulation {
         pose.rotation,
         this.tuning.radius,
         this.tuning.thickness,
-        pose.faction,
+        pose.type,
       );
-      if (!this.world.addCylinder(coin.id, coin, exitVelocityY))
+      if (!this.world.addCylinder(coin.id, coin, exitVelocityY)) {
+        this.lifecycle.lose(coin.id, "spawn-failed");
         throw new Error("preflighted chute release could not be spawned");
+      }
       ids.push(coin.id);
     }
     this.lastDropTick = this.simulationTick;
     return ids;
   }
 
-  reset(patch?: Partial<Tuning>): void {
+  reset(patch?: Partial<Tuning>, config?: Partial<SimulationConfig>): void {
     if (this.disposed) return;
 
     const nextTuning = sanitizeTuning(this.tuning, patch);
+    const nextConfig = simulationConfig(this.config, config);
     this.world.dispose();
     Object.assign(this.tuning, nextTuning);
+    Object.assign(this.config, nextConfig);
     this.coinBoundingRadius = Math.hypot(
       this.tuning.radius,
       this.tuning.thickness / 2,
@@ -196,7 +256,9 @@ class PusherSimulation implements Simulation {
     this.coinClearanceSquared = coinClearance * coinClearance;
     this.world = new RapierWorld(this.tuning);
     this.lifecycle.reset();
-    this.rain = planRain(this.tuning);
+    this.gizmoLifecycle.reset();
+    this.feedAdmissions.length = 0;
+    this.rain = planRain(this.tuning, this.config.openingMix);
     this.rainCursor = 0;
     this.pendingRain = this.rain.length;
     this.elapsed = 0;
@@ -204,7 +266,25 @@ class PusherSimulation implements Simulation {
     this.lastDropTick = Number.NEGATIVE_INFINITY;
     this.lastPhysicsMs = 0;
     this.sleeping = 0;
+    this.bombsActive = false;
   }
+
+  setBombsActive(active: boolean): void {
+    if (this.disposed) return;
+    if (active && this.bombsActive) return;
+    this.bombsActive = active;
+    for (const coin of this.lifecycle.coins.values()) {
+      coin.bombHits = 0;
+    }
+    if (!active) this.world.clearBlastAssociations();
+  }
+
+  cancelRain(): void {
+    this.rain.length = 0;
+    this.rainCursor = 0;
+    this.pendingRain = 0;
+  }
+
   configure(patch: Partial<Tuning>): void {
     if (this.disposed) return;
 
@@ -217,9 +297,10 @@ class PusherSimulation implements Simulation {
     this.tuning.dropHeight = sanitized.dropHeight;
     this.tuning.dropRate = sanitized.dropRate;
     this.world.updateFriction(this.tuning.friction);
+    this.world.feeder.configure(this.tuning);
   }
 
-  drainEvents(): CollectionEvent[] {
+  drainEvents(): CoinEvent[] {
     return this.lifecycle.drainEvents();
   }
 
@@ -230,14 +311,14 @@ class PusherSimulation implements Simulation {
       sleeping: this.sleeping,
       spawned: this.lifecycle.spawned,
       collected: this.lifecycle.collected,
-      allyCollected: this.lifecycle.allyCollected,
-      enemyCollected: this.lifecycle.enemyCollected,
-      dudCollected: this.lifecycle.dudCollected,
+      collectedByType: this.lifecycle.collectedByType,
+      detonated: this.lifecycle.detonated,
       lost: this.lifecycle.lost,
       pendingRain: this.pendingRain,
       physicsMs: this.lastPhysicsMs,
       pusherZ: this.world.pusherZ,
       phase: (this.elapsed % this.tuning.period) / this.tuning.period,
+      gizmos: this.gizmoLifecycle.stats(),
     };
   }
 
@@ -246,10 +327,23 @@ class PusherSimulation implements Simulation {
     this.disposed = true;
     this.world.dispose();
     this.lifecycle.reset();
+    this.gizmoLifecycle.reset();
+    this.feedAdmissions.length = 0;
     this.rain = [];
     this.rainCursor = 0;
     this.pendingRain = 0;
     this.sleeping = 0;
+  }
+
+  private spawnGizmo(): void {
+    const pending = this.gizmoLifecycle.pendingSpawn;
+    if (!pending || this.simulationTick >= 1440 ||
+      !this.world.canAddSphere(pending.position, pending.definition.radius)) return;
+    const gizmo = this.gizmoLifecycle.spawn(this.lifecycle.allocateId());
+    if (!this.world.addSphere(gizmo)) {
+      this.gizmoLifecycle.lose(gizmo.id, "spawn-failed");
+      throw new Error("Preflighted gizmo could not be spawned");
+    }
   }
 
   private spawnRainBatch(): void {
@@ -270,7 +364,7 @@ class PusherSimulation implements Simulation {
         !this.isSpawnClear(drop.pose)
       )
         continue;
-      if (!this.spawnCoin(drop.pose, drop.faction)) continue;
+      if (!this.spawnCoin(drop.pose, drop.type)) continue;
 
       this.rain[index] = undefined;
       this.pendingRain -= 1;
@@ -342,18 +436,140 @@ class PusherSimulation implements Simulation {
     };
   }
 
-  private spawnCoin(pose: RainPose, faction: CoinFaction = "ally"): boolean {
+  private spawnCoin(pose: RainPose, type: CoinType = "sword"): boolean {
+    if (!this.world.canAddCylinders([pose], this.tuning.radius, this.tuning.thickness)) return false;
     const coin = this.lifecycle.spawn(
       pose,
       pose.rotation,
       this.tuning.radius,
       this.tuning.thickness,
-      faction,
+      type,
     );
     const added = this.world.addCylinder(coin.id, coin);
-    if (!added) this.lifecycle.lose(coin.id);
+    if (!added) this.lifecycle.lose(coin.id, "spawn-failed");
     return added;
   }
+
+  private resolveBombImpacts(impacts: readonly CoinImpact[]): void {
+    const thresholdCrossings: Array<{
+      id: number;
+      chainRootId: number;
+      blastAssociated: boolean;
+      position: Vec3;
+    }> = [];
+    const periodTicks = Math.ceil(this.tuning.period / FIXED_DT);
+    const seenBombStrikers = new Set<string>();
+    const qualifying: Array<{
+      bombId: number;
+      strikerId: number;
+      strikerBlast: CoinImpact["aBlast"];
+    }> = [];
+
+    for (const impact of impacts) {
+      if (impact.closingSpeed < this.config.bomb.minClosingSpeed) continue;
+      qualifying.push({
+        bombId: impact.aId,
+        strikerId: impact.bId,
+        strikerBlast: impact.bBlast,
+      });
+      qualifying.push({
+        bombId: impact.bId,
+        strikerId: impact.aId,
+        strikerBlast: impact.aBlast,
+      });
+    }
+    qualifying.sort(
+      (left, right) =>
+        left.bombId - right.bombId || left.strikerId - right.strikerId,
+    );
+    for (const impact of qualifying) {
+      this.recordBombImpact(
+        impact.bombId,
+        impact.strikerId,
+        impact.strikerBlast,
+        periodTicks,
+        seenBombStrikers,
+        thresholdCrossings,
+      );
+    }
+
+    thresholdCrossings.sort((left, right) => left.id - right.id);
+    const detonations: typeof thresholdCrossings = [];
+    for (const detonation of thresholdCrossings) {
+      if (
+        !this.lifecycle.detonate(
+          detonation.id,
+          detonation.chainRootId,
+          detonation.blastAssociated,
+          detonation.position,
+        )
+      )
+        continue;
+      this.world.removeCylinder(detonation.id);
+      detonations.push(detonation);
+    }
+    for (const detonation of detonations) {
+      this.world.applyRadialBlast(
+        detonation.position,
+        this.config.bomb.blastRadius,
+        this.config.bomb.blastDeltaSpeed,
+        detonation.chainRootId,
+        this.simulationTick,
+      );
+    }
+  }
+
+  private recordBombImpact(
+    bombId: number,
+    strikerId: number,
+    strikerBlast: CoinImpact["aBlast"],
+    periodTicks: number,
+    seenBombStrikers: Set<string>,
+    thresholdCrossings: Array<{
+      id: number;
+      chainRootId: number;
+      blastAssociated: boolean;
+      position: Vec3;
+    }>,
+  ): void {
+    const bomb = this.lifecycle.coins.get(bombId);
+    if (!bomb || bomb.type !== "bomb") return;
+
+    const pair = `${bombId}:${strikerId}`;
+    if (seenBombStrikers.has(pair)) return;
+    seenBombStrikers.add(pair);
+
+    bomb.bombHits += 1;
+    if (bomb.bombHits !== this.config.bomb.hitThreshold) return;
+
+    const blastAssociated =
+      strikerBlast !== null &&
+      this.simulationTick - strikerBlast.tick >= 0 &&
+      this.simulationTick - strikerBlast.tick <= periodTicks;
+    const chainRootId =
+      strikerBlast !== null && blastAssociated ? strikerBlast.rootId : bomb.id;
+    thresholdCrossings.push({
+      id: bomb.id,
+      chainRootId,
+      blastAssociated,
+      position: { ...bomb.position },
+    });
+  }
+
+  private readonly syncGizmo = (id: number, body: RAPIER.RigidBody): void => {
+    const position = body.translation();
+    const rotation = body.rotation();
+    if (!isFinitePose(position, rotation)) {
+      this.gizmoLifecycle.lose(id, "invalid-pose");
+      this.world.removeSphere(id);
+      return;
+    }
+    this.gizmoLifecycle.update(id, position, rotation);
+    const resolution = classifyCoinPosition(position, this.tuning.shelfFront);
+    if (resolution === "collected") this.gizmoLifecycle.collect(id);
+    if (resolution === "lost") this.gizmoLifecycle.lose(id, "out-of-bounds");
+    if (resolution) this.world.removeSphere(id);
+  };
 
   private syncCoins(): void {
     this.sleeping = 0;
@@ -364,7 +580,7 @@ class PusherSimulation implements Simulation {
     const position = body.translation();
     const rotation = body.rotation();
     if (!isFinitePose(position, rotation)) {
-      this.lifecycle.lose(id);
+      this.lifecycle.lose(id, "invalid-pose");
       this.world.removeCylinder(id);
       return;
     }
@@ -372,7 +588,8 @@ class PusherSimulation implements Simulation {
     this.lifecycle.update(id, position, rotation);
     const resolution = classifyCoinPosition(position, this.tuning.shelfFront);
     if (resolution === "collected") this.lifecycle.collect(id, position);
-    if (resolution === "lost") this.lifecycle.lose(id, position);
+    if (resolution === "lost")
+      this.lifecycle.lose(id, "out-of-bounds", position);
     if (resolution) this.world.removeCylinder(id);
     else if (body.isSleeping()) this.sleeping += 1;
   };
@@ -381,7 +598,7 @@ class PusherSimulation implements Simulation {
 export function classifyCoinPosition(
   position: Vec3,
   shelfFront: number,
-): CollectionEvent["kind"] | undefined {
+): "collected" | "lost" | undefined {
   if (
     Math.abs(position.x) > LOST_X ||
     position.z < LOST_REAR_Z ||
@@ -409,8 +626,9 @@ function isFinitePose(position: Vec3, rotation: Quaternion): boolean {
 
 export async function createSimulation(
   tuning?: Partial<Tuning>,
+  config?: Partial<SimulationConfig>,
 ): Promise<Simulation> {
   rapierInitialization ??= RAPIER.init();
   await rapierInitialization;
-  return new PusherSimulation(tuning);
+  return new PusherSimulation(tuning, config);
 }

@@ -1,6 +1,11 @@
 import type { ChuteSettings } from "../chutes";
 import type { SimulationStats, Tuning } from "../contracts";
-
+import type {
+  CombatStepResult,
+  EncounterSnapshot,
+  FeedTray,
+} from "../combat/types";
+import type { PurchasePreview, PurchaseRequest, PurchaseResult, RunSnapshot, StarterId } from "../run/types";
 export type LiveTuningKey =
   "coinWeight" | "friction" | "stroke" | "period" | "dropHeight";
 export type ResetTuningKey =
@@ -8,9 +13,7 @@ export type ResetTuningKey =
   | "density"
   | "radius"
   | "thickness"
-  | "shelfFront"
-  | "openingEnemyPercent"
-  | "openingDudPercent";
+  | "shelfFront";
 export type TuningKey = LiveTuningKey | ResetTuningKey;
 export type TuningPatch = Partial<Tuning>;
 
@@ -22,9 +25,6 @@ export interface AppUiElements {
   restart: HTMLButtonElement;
   scene: HTMLElement;
   collected: HTMLElement;
-  allyCollected: HTMLElement;
-  enemyCollected: HTMLElement;
-  dudCollected: HTMLElement;
   active: HTMLElement;
   feedback: HTMLElement;
   loading: HTMLElement;
@@ -39,6 +39,14 @@ export interface AppUiElements {
   reducedMotion: HTMLInputElement;
   volume: HTMLInputElement;
   metrics: HTMLElement;
+  playerHp: HTMLElement;
+  playerHpBar: HTMLElement;
+  enemyHp: HTMLElement;
+  enemyHpBar: HTMLElement;
+  enemyRoster: HTMLElement;
+  currency: HTMLElement;
+  lifecycle: HTMLElement;
+  combatCues: HTMLElement;
   tuningInputs: Readonly<Record<TuningKey, HTMLInputElement>>;
   tuningNumbers: Readonly<Record<TuningKey, HTMLInputElement>>;
   densityPresets: readonly HTMLButtonElement[];
@@ -48,7 +56,11 @@ export interface AppUiCallbacks {
   onPauseChange?: (paused: boolean) => void;
   onSoundChange?: (enabled: boolean) => void;
   onTuningPanelChange?: (open: boolean) => void;
-  onRestart?: (tuning: Tuning) => void;
+  onRestart?: (tuning?: Tuning) => void;
+  onChooseStarter?: (id: StarterId) => boolean;
+  onPreviewPurchase?: (request: PurchaseRequest) => PurchasePreview;
+  onPurchase?: (request: PurchaseRequest) => PurchaseResult;
+  onContinueRun?: () => boolean;
   onLiveTuningChange?: (patch: TuningPatch) => void;
   onResetTuningChange?: (patch: TuningPatch) => void;
   onReducedMotionChange?: (reduced: boolean) => void;
@@ -82,16 +94,12 @@ export interface AppUi {
   setTuning(tuning: Partial<Tuning>): void;
   setChuteSettings(settings: ChuteSettings, radius: number): void;
   updateStats(
-    stats: Pick<
-      SimulationStats,
-      | "active"
-      | "collected"
-      | "allyCollected"
-      | "enemyCollected"
-      | "dudCollected"
-    >,
+    stats: Pick<SimulationStats, "active" | "collected">,
   ): void;
   updateMetrics(stats: SimulationStats, metrics?: MetricsSnapshot): void;
+  updateEncounter(snapshot: EncounterSnapshot, trays: readonly FeedTray[]): void;
+  updateRun(snapshot: RunSnapshot): void;
+  showCombat(batch: CombatStepResult): void;
   setFeedback(message: string): void;
   setRhythm(label: string, active?: boolean): void;
   setStatus(message: string): void;

@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import { createSimulation } from "../src/simulation/index";
-import type { CollectionEvent, Simulation } from "../src/contracts";
+import { GOLD_ONLY_MIX } from "../src/combat/config";
+import { createSimulation } from "../src/simulation";
+import type { CoinEvent, Simulation } from "../src/contracts";
+import { createChuteLayout } from "../src/chutes";
+import { createSyntheticSlots } from "../src/experiments/chutes";
 import { createLaneObserver } from "../src/experiments/lanes";
 import { chooseRuleAction } from "../src/experiments/rule-policy";
 import {
@@ -171,12 +174,13 @@ export async function runReleaseTrial(
     dropHeight: 3.5,
     dropRate: 6,
   };
-  const simulation = await createSimulation(tuning);
+  const simulation = await createSimulation(tuning, { openingMix: GOLD_ONLY_MIX });
   let idle: Simulation | undefined;
   let enemyOnly: Simulation | undefined;
   try {
-    idle = await createSimulation(tuning);
-    if (pattern === "flanks") enemyOnly = await createSimulation(tuning);
+    idle = await createSimulation(tuning, { openingMix: GOLD_ONLY_MIX });
+    if (pattern === "flanks")
+      enemyOnly = await createSimulation(tuning, { openingMix: GOLD_ONLY_MIX });
     const observer = createLaneObserver();
     const resolved = new Map<Simulation, Set<number>>([
       [simulation, new Set()],
@@ -186,7 +190,7 @@ export async function runReleaseTrial(
     let tick = 0;
     let peakActive = 0;
 
-    const drain = (world: Simulation): CollectionEvent[] => {
+    const drain = (world: Simulation): CoinEvent[] => {
       const events = world.drainEvents();
       const seen = resolved.get(world)!;
       for (const event of events) {
@@ -197,7 +201,10 @@ export async function runReleaseTrial(
         seen.add(event.id);
       }
       const stats = world.stats();
-      if (stats.spawned !== stats.active + stats.collected + stats.lost)
+      if (
+        stats.spawned !==
+        stats.active + stats.collected + stats.detonated + stats.lost
+      )
         throw new Error("Physical conservation failed");
       return events;
     };
@@ -235,7 +242,7 @@ export async function runReleaseTrial(
     const controlEnemyIds = new Set<number>();
 
     const classify = (
-      events: readonly CollectionEvent[],
+      events: readonly CoinEvent[],
       player: ReadonlySet<number>,
       enemy: ReadonlySet<number>,
       initial: ReadonlySet<number>,
@@ -314,13 +321,13 @@ export async function runReleaseTrial(
       }
 
       const center = aims[decision.action.lane]!;
-      const chutePositions =
-        pattern === "flanks"
-          ? [center - spacing, center, center + spacing]
-          : [center];
-      const playerChutePositions = [center];
-      const enemyChutePositions =
-        pattern === "flanks" ? [center - spacing, center + spacing] : [];
+      const layout = createChuteLayout(
+        createSyntheticSlots(pattern === "flanks" ? 2 : 0),
+        simulation.tuning, center, spacing,
+      ).sort((a, b) => a.x - b.x);
+      const chutePositions = layout.map(({ x }) => x);
+      const playerChutePositions = layout.filter(({ source }) => source === "player").map(({ x }) => x);
+      const enemyChutePositions = layout.filter(({ source }) => source === "enemy").map(({ x }) => x);
       const startTick = tick;
       let acceptedPlayer = 0;
       let acceptedEnemy = 0;
@@ -346,22 +353,11 @@ export async function runReleaseTrial(
             acceptedPlayer++;
           }
         } else if (offset === 0) {
-          const chutes =
-            pattern === "stack"
-              ? [{ x: center, count: trial.coinsPerRelease }]
-              : [
-                  {
-                    x: center - spacing,
-                    count: trial.enemyCoins!,
-                    faction: "enemy" as const,
-                  },
-                  { x: center, count: trial.coinsPerRelease },
-                  {
-                    x: center + spacing,
-                    count: trial.enemyCoins!,
-                    faction: "enemy" as const,
-                  },
-                ];
+          const chutes = layout.map(({ x, source }) => ({
+            x,
+            count: source === "player" ? trial.coinsPerRelease : trial.enemyCoins!,
+            type: source === "player" ? "sword" as const : "skull" as const,
+          }));
           const ids = simulation.releaseChutes(chutes);
           if (!ids)
             throw new Error(`Atomic chute release ${index + 1} was rejected`);
@@ -380,8 +376,8 @@ export async function runReleaseTrial(
             acceptedPlayer = trial.coinsPerRelease;
             acceptedEnemy = flank * 2;
             const controlIds = enemyOnly!.releaseChutes([
-              { x: center - spacing, count: flank, faction: "enemy" },
-              { x: center + spacing, count: flank, faction: "enemy" },
+              { x: center - spacing, count: flank, type: "skull" },
+              { x: center + spacing, count: flank, type: "skull" },
             ]);
             if (!controlIds)
               throw new Error(

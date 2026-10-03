@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { createSimulation } from "../src/simulation/index";
-import { FIXED_DT } from "../src/simulation/config";
+import { GOLD_ONLY_MIX } from "../src/combat/config";
+import type { CoinEvent } from "../src/contracts";
 import { selectTargets, TARGET_LANES } from "../src/experiments/targets";
-import type { CollectionEvent } from "../src/contracts";
+import { FIXED_DT } from "../src/simulation/config";
+import { createSimulation } from "../src/simulation/index";
 
 export type Strategy =
   "none" | "center" | "target" | "opposite" | "alternating" | "random";
@@ -62,21 +63,24 @@ function randomFactory(seed: number): () => number {
 
 export async function runTrial(trial: Trial): Promise<Result> {
   // Pin every physical input instead of inheriting a subsequently tuned default.
-  const simulation = await createSimulation({
-    seed: trial.seed,
-    density: trial.density,
-    stroke: trial.stroke,
-    shelfFront: trial.shelfFront,
-    radius: 0.32,
-    thickness: 0.13,
-    coinWeight: 1,
-    friction: 0.58,
-    period: 2.4,
-    dropHeight: 3.5,
-    dropRate: 6,
-  });
+  const simulation = await createSimulation(
+    {
+      seed: trial.seed,
+      density: trial.density,
+      stroke: trial.stroke,
+      shelfFront: trial.shelfFront,
+      radius: 0.32,
+      thickness: 0.13,
+      coinWeight: 1,
+      friction: 0.58,
+      period: 2.4,
+      dropHeight: 3.5,
+      dropRate: 6,
+    },
+    { openingMix: GOLD_ONLY_MIX },
+  );
   const seen = new Set<number>();
-  function drain(): CollectionEvent[] {
+  function drain(): CoinEvent[] {
     const events = simulation.drainEvents();
     for (const event of events) {
       if (seen.has(event.id))
@@ -84,7 +88,7 @@ export async function runTrial(trial: Trial): Promise<Result> {
       seen.add(event.id);
     }
     const s = simulation.stats();
-    if (s.spawned !== s.active + s.collected + s.lost)
+    if (s.spawned !== s.active + s.collected + s.detonated + s.lost)
       throw new Error("Coin conservation failed");
     return events;
   }

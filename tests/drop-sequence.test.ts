@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { GOLD_ONLY_MIX } from "../src/combat/config";
+import type { ChuteDrop } from "../src/chutes";
 import {
   createChuteLayout,
   DEFAULT_CHUTES,
@@ -7,21 +9,33 @@ import {
 import { createDropSequence } from "../src/feedback/drop-sequence";
 import { createSimulation } from "../src/simulation";
 import { FIXED_DT } from "../src/simulation/config";
+import { createSyntheticSlots } from "../src/experiments/chutes";
+
+function typedChutes(layout: readonly ChuteDrop[]) {
+  return layout.map(({ x, count, source }) => ({
+    x,
+    count,
+    type: source === "enemy" ? ("skull" as const) : ("sword" as const),
+  }));
+}
 
 describe("coin-by-coin drop sets", () => {
   it("honors fractional-second coin delays without a trailing set delay", async () => {
-    const simulation = await createSimulation({ density: 0 });
+    const simulation = await createSimulation(
+      { density: 0 },
+      { openingMix: GOLD_ONLY_MIX },
+    );
     const sequence = createDropSequence();
     const settings = sanitizeChutes(
       { ...DEFAULT_CHUTES, dropDelay: 0.23 },
       simulation.tuning,
     );
     const intervalTicks = Math.ceil(settings.dropDelay / FIXED_DT);
-    const layout = createChuteLayout(settings, simulation.tuning, 0);
+    const layout = createChuteLayout(createSyntheticSlots(2), simulation.tuning, 0, settings.chuteSpacing);
     let tick = 0;
     const releasedAt: number[] = [];
     const release = () => {
-      if (!simulation.releaseChutes(layout, 0)) return false;
+      if (!simulation.releaseChutes(typedChutes(layout), 0)) return false;
       releasedAt.push(tick);
       return true;
     };
@@ -37,14 +51,10 @@ describe("coin-by-coin drop sets", () => {
       expect(sequence.remaining).toBe(0);
       expect(simulation.stats().spawned).toBe(9);
       expect(
-        [...simulation.coins.values()].filter(
-          (coin) => coin.faction === "enemy",
-        ),
+        [...simulation.coins.values()].filter((coin) => coin.type === "skull"),
       ).toHaveLength(6);
       expect(
-        [...simulation.coins.values()].filter(
-          (coin) => coin.faction === "ally",
-        ),
+        [...simulation.coins.values()].filter((coin) => coin.type === "sword"),
       ).toHaveLength(3);
       expect(sequence.start(1, intervalTicks, tick, release)).toBe(true);
       expect(releasedAt).toEqual([0, 14, 28, 40]);
@@ -62,18 +72,21 @@ describe("coin-by-coin drop sets", () => {
   ])(
     "clears touching chutes at $delay s with thickness $thickness and $density opening coins",
     async ({ delay, thickness, count, density }) => {
-      const simulation = await createSimulation({ density, thickness });
+      const simulation = await createSimulation(
+        { density, thickness },
+        { openingMix: GOLD_ONLY_MIX },
+      );
       const sequence = createDropSequence();
       const settings = sanitizeChutes(
         { ...DEFAULT_CHUTES, dropDelay: delay, dropsPerAction: count },
         simulation.tuning,
       );
-      const layout = createChuteLayout(settings, simulation.tuning, 0);
+      const layout = createChuteLayout(createSyntheticSlots(2), simulation.tuning, 0, settings.chuteSpacing);
       const intervalTicks = Math.ceil(settings.dropDelay / FIXED_DT);
       let tick = 0;
       const releasedAt: number[] = [];
       const release = () => {
-        if (simulation.releaseChutes(layout, 0) === null) return false;
+        if (simulation.releaseChutes(typedChutes(layout), 0) === null) return false;
         releasedAt.push(tick);
         return true;
       };
@@ -85,7 +98,7 @@ describe("coin-by-coin drop sets", () => {
         expect(simulation.stats().spawned).toBe(density);
         expect(sequence.start(count, intervalTicks, tick, release)).toBe(true);
         // Clearance, not overlap permission, makes the next timed round possible.
-        expect(simulation.releaseChutes(layout, 0)).toBeNull();
+        expect(simulation.releaseChutes(typedChutes(layout), 0)).toBeNull();
         for (tick = 1; tick <= (count - 1) * intervalTicks; tick++) {
           simulation.step();
           sequence.advance(tick, release);
@@ -100,6 +113,7 @@ describe("coin-by-coin drop sets", () => {
         expect(simulation.stats().spawned).toBe(
           simulation.stats().active +
             simulation.stats().collected +
+            simulation.stats().detonated +
             simulation.stats().lost,
         );
       } finally {
@@ -111,14 +125,14 @@ describe("coin-by-coin drop sets", () => {
   it.each([0, 4])(
     "releases the maximum click budget with %i enemy chutes",
     async (enemyChutes) => {
-      const simulation = await createSimulation({ density: 0 });
-      const sequence = createDropSequence();
-      const layout = createChuteLayout(
-        { ...DEFAULT_CHUTES, enemyChutes },
-        simulation.tuning,
-        0,
+      const simulation = await createSimulation(
+        { density: 0 },
+        { openingMix: GOLD_ONLY_MIX },
       );
-      const release = () => simulation.releaseChutes(layout, 0) !== null;
+      const sequence = createDropSequence();
+      const layout = createChuteLayout(createSyntheticSlots(enemyChutes), simulation.tuning, 0, DEFAULT_CHUTES.chuteSpacing);
+      const release = () =>
+        simulation.releaseChutes(typedChutes(layout), 0) !== null;
       try {
         expect(sequence.start(30, 30, 0, release)).toBe(true);
         for (let tick = 1; tick <= 29 * 30; tick++) {
@@ -134,10 +148,13 @@ describe("coin-by-coin drop sets", () => {
   );
 
   it("never emits catch-up batches together after a delayed advance", async () => {
-    const simulation = await createSimulation({ density: 0 });
+    const simulation = await createSimulation(
+      { density: 0 },
+      { openingMix: GOLD_ONLY_MIX },
+    );
     const sequence = createDropSequence();
-    const layout = createChuteLayout(DEFAULT_CHUTES, simulation.tuning, 0);
-    const release = () => simulation.releaseChutes(layout) !== null;
+    const layout = createChuteLayout(createSyntheticSlots(2), simulation.tuning, 0, DEFAULT_CHUTES.chuteSpacing);
+    const release = () => simulation.releaseChutes(typedChutes(layout)) !== null;
     try {
       expect(sequence.start(3, 30, 0, release)).toBe(true);
       for (let step = 0; step < 300; step++) simulation.step();
@@ -157,10 +174,13 @@ describe("coin-by-coin drop sets", () => {
   });
 
   it("cancels remaining batches without resuming them and admits a new deliberate sequence", async () => {
-    const simulation = await createSimulation({ density: 0 });
+    const simulation = await createSimulation(
+      { density: 0 },
+      { openingMix: GOLD_ONLY_MIX },
+    );
     const sequence = createDropSequence();
-    const layout = createChuteLayout(DEFAULT_CHUTES, simulation.tuning, 0);
-    const release = () => simulation.releaseChutes(layout) !== null;
+    const layout = createChuteLayout(createSyntheticSlots(2), simulation.tuning, 0, DEFAULT_CHUTES.chuteSpacing);
+    const release = () => simulation.releaseChutes(typedChutes(layout)) !== null;
     try {
       expect(sequence.start(5, 30, 0, release)).toBe(true);
       sequence.cancel();
@@ -177,10 +197,13 @@ describe("coin-by-coin drop sets", () => {
   });
 
   it("stops on refused physical admission rather than silently retrying or reducing the budget", async () => {
-    const simulation = await createSimulation({ density: 0 });
+    const simulation = await createSimulation(
+      { density: 0 },
+      { openingMix: GOLD_ONLY_MIX },
+    );
     const sequence = createDropSequence();
-    const layout = createChuteLayout(DEFAULT_CHUTES, simulation.tuning, 0);
-    const release = () => simulation.releaseChutes(layout) !== null;
+    const layout = createChuteLayout(createSyntheticSlots(2), simulation.tuning, 0, DEFAULT_CHUTES.chuteSpacing);
+    const release = () => simulation.releaseChutes(typedChutes(layout)) !== null;
     try {
       expect(sequence.start(3, 30, 0, release)).toBe(true);
       simulation.configure({ dropRate: 0 });

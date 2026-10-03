@@ -1,4 +1,5 @@
 import type { CoinView } from "../contracts";
+import { MACHINE_GEOMETRY } from "../machine-geometry";
 
 /** The three presentation lanes, ordered left to right. */
 export const TARGET_LANES = [-3, 0, 3] as const;
@@ -8,7 +9,7 @@ export const TARGET_LANES = [-3, 0, 3] as const;
 // falling below the shelf, riding the upper shelf, or still high in the air.
 // With no velocity in CoinView, position is the only honest settled-state
 // signal available to this snapshot-only playtest probe.
-const LOWER_SHELF_MIN_Y = 0;
+const LOWER_SHELF_MIN_Y = MACHINE_GEOMETRY.shelfTop;
 const LOWER_SHELF_MAX_Y = 0.45;
 const FRONT_BAND_DEPTH = 1.5;
 const LANE_WIDTH = 1.5;

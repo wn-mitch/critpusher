@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CollectionEvent } from "../src/contracts";
+import type { CoinEvent } from "../src/contracts";
 import {
   CASCADE_MAX_SECONDS,
   CASCADE_QUIET_SECONDS,
@@ -9,14 +9,20 @@ import {
 function events(
   firstId: number,
   count: number,
-  kind: CollectionEvent["kind"] = "collected",
-): CollectionEvent[] {
-  return Array.from({ length: count }, (_, index) => ({
-    id: firstId + index,
-    kind,
-    faction: "ally" as const,
-    position: { x: 0, y: 0, z: 0 },
-  }));
+  kind: CoinEvent["kind"] = "collected",
+): CoinEvent[] {
+  return Array.from({ length: count }, (_, index) => {
+    const base = {
+      id: firstId + index,
+      type: "gold" as const,
+      position: { x: 0, y: 0, z: 0 },
+    };
+    if (kind === "lost")
+      return { ...base, kind, reason: "out-of-bounds" as const };
+    if (kind === "detonated")
+      return { ...base, kind, chainRootId: null, blastAssociated: false };
+    return { ...base, kind };
+  });
 }
 
 describe("collection cascade tracking", () => {

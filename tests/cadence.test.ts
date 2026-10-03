@@ -43,9 +43,10 @@ describe("fixed-step drop cadence", () => {
     expect(simulation.drop(0)).toBe(true);
     advance(simulation, 4);
     simulation.configure({ dropRate: 12 });
-    expect(simulation.drop(0)).toBe(false);
+    // A separate column isolates cadence from the previous coin's outlet clearance.
+    expect(simulation.drop(2)).toBe(false);
     simulation.step();
-    expect(simulation.drop(0)).toBe(true);
+    expect(simulation.drop(2)).toBe(true);
 
     simulation.reset();
     expect(simulation.drop(0)).toBe(true);

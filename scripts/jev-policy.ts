@@ -1,4 +1,7 @@
+import { COIN_TYPES } from "../src/contracts";
 import type {
+  CombatSolverPolicy,
+  CombatSolverState,
   LaneBoard,
   SolverAction,
   SolverDecision,
@@ -14,7 +17,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const PROBABILITY_SUM_TOLERANCE = 0.02;
 const WAITS = [0, 1, 2, 3] as const;
 
-interface JevPolicyOptions {
+export interface JevPolicyOptions {
   apiKey?: string;
   model?: string;
   maxRequests: number;
@@ -140,6 +143,151 @@ function serializeState(state: SolverState): string {
   })}`;
 }
 
+function copyCombatCounts(
+  counts: Record<(typeof COIN_TYPES)[number], number>,
+): Record<(typeof COIN_TYPES)[number], number> {
+  return Object.fromEntries(
+    COIN_TYPES.map((type) => [type, counts[type]]),
+  ) as Record<(typeof COIN_TYPES)[number], number>;
+}
+
+function serializeCombatState(state: CombatSolverState): string {
+  const { observation } = state;
+  return `Combat state uses the conservative ${observation.visibilityModel} readable projection only. x increases left-to-right; z increases forward toward the collection edge. A null feed slot is hidden or unreadable; do not infer its type. Choose survival and defeating the front enemy before remaining HP and currency. Rules give effective coin values before the simulation-timed sword combo. Gold gives 1 currency and diamonds give 10. Each physical bomb detonation deals ${observation.rules.bombDamage} HP to each side; zero HP damage does not disable the physical blast.
+${JSON.stringify({
+    visibilityModel: observation.visibilityModel,
+    board: observableBoard(observation.board),
+    playerHp: observation.playerHp,
+    playerMaxHp: observation.playerMaxHp,
+    enemies: observation.enemies,
+    frontEnemyId: observation.frontEnemyId,
+    waveIndex: observation.waveIndex,
+    waveCount: observation.waveCount,
+    livingWaveHp: observation.livingWaveHp,
+    currency: observation.currency,
+    ownedBuild: observation.ownedBuild,
+    combo: observation.combo,
+    rules: {
+      swordDamage: observation.rules.swordDamage,
+      skullDamage: observation.rules.skullDamage,
+      potionHealing: observation.rules.potionHealing,
+      bombDamage: observation.rules.bombDamage,
+      bomb: {
+        hitThreshold: observation.rules.bomb.hitThreshold,
+        minClosingSpeed: observation.rules.bomb.minClosingSpeed,
+        blastRadius: observation.rules.bomb.blastRadius,
+        blastDeltaSpeed: observation.rules.bomb.blastDeltaSpeed,
+      },
+    },
+    candidates: observation.candidates.map((candidate) => ({
+      aimX: candidate.aimX,
+      chutes: candidate.chutes.map((chute) => ({
+        id: chute.id,
+        ownerId: chute.ownerId,
+        slot: chute.slot,
+        enabled: chute.enabled,
+        x: chute.x,
+        source: chute.source,
+      })),
+    })),
+    feed: observation.feed.map((tray) => ({
+      id: tray.id,
+      ownerId: tray.ownerId,
+      slot: tray.slot,
+      enabled: tray.enabled,
+      x: tray.x,
+      source: tray.source,
+      preview: tray.preview,
+    })),
+    exposedCoins: observation.exposedCoins.map((coin) => ({
+      type: coin.type,
+      position: { x: coin.position.x, y: coin.position.y, z: coin.position.z },
+      bombHits: coin.bombHits,
+      nearThreshold: coin.nearThreshold,
+    })),
+    lanes: observation.lanes.map((lane) => ({
+      index: lane.index,
+      upper: {
+        counts: copyCombatCounts(lane.upper.counts),
+        nearThresholdBombs: lane.upper.nearThresholdBombs,
+      },
+      lowerRear: {
+        counts: copyCombatCounts(lane.lowerRear.counts),
+        nearThresholdBombs: lane.lowerRear.nearThresholdBombs,
+      },
+      lowerMiddle: {
+        counts: copyCombatCounts(lane.lowerMiddle.counts),
+        nearThresholdBombs: lane.lowerMiddle.nearThresholdBombs,
+      },
+      lowerFront: {
+        counts: copyCombatCounts(lane.lowerFront.counts),
+        nearThresholdBombs: lane.lowerFront.nearThresholdBombs,
+      },
+      nearEdge: {
+        counts: copyCombatCounts(lane.nearEdge.counts),
+        nearThresholdBombs: lane.nearEdge.nearThresholdBombs,
+      },
+    })),
+    recentEffects: observation.recentEffects.map((batch) => ({
+      delta: {
+        swordDamage: batch.delta.swordDamage,
+        skullDamage: batch.delta.skullDamage,
+        bombDamageToEnemy: batch.delta.bombDamageToEnemy,
+        bombDamageToPlayer: batch.delta.bombDamageToPlayer,
+        enemyHpRemoved: batch.delta.enemyHpRemoved,
+        healingOffered: batch.delta.healingOffered,
+        healingUsed: batch.delta.healingUsed,
+        healingWasted: batch.delta.healingWasted,
+        currencyGained: batch.delta.currencyGained,
+        safeBombs: batch.delta.safeBombs,
+        detonations: batch.delta.detonations,
+        blastAssociatedDetonations: batch.delta.blastAssociatedDetonations,
+      },
+      effects: batch.effects.map((effect) => ({
+        type: effect.type,
+        position: {
+          x: effect.position.x,
+          y: effect.position.y,
+          z: effect.position.z,
+        },
+        enemyDamage: effect.enemyDamage,
+        swordMultiplier: effect.swordMultiplier,
+        playerDamage: effect.playerDamage,
+        healingOffered: effect.healingOffered,
+        currency: effect.currency,
+        safeBomb: effect.safeBomb,
+        detonated: effect.detonated,
+        blastAssociated: effect.blastAssociated,
+      })),
+    })),
+    candidateAimXs: [...state.candidateAimXs],
+    timing: state.timing,
+  })}`;
+}
+
+function combatActionCriteria(
+  state: CombatSolverState,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    ACTION_CHOICES.map(({ key, action }) => {
+      const candidate = state.observation.candidates[action.lane];
+      if (!candidate)
+        throw new Error(`Missing combat candidate for lane ${action.lane}`);
+      const positions = candidate.chutes
+        .map((chute) => `${chute.source} x=${chute.x}`)
+        .join(", ");
+      const waitMeaning =
+        action.waitQuarters === 0
+          ? "release now"
+          : `wait ${action.waitQuarters} quarter-cycle${action.waitQuarters === 1 ? "" : "s"}`;
+      return [
+        key,
+        `Choose candidate ${action.lane}, player aim x=${candidate.aimX}; ${waitMeaning}, then release synchronized chutes ${positions}.`,
+      ];
+    }),
+  );
+}
+
 interface JevResponse {
   model?: unknown;
   answers?: unknown;
@@ -253,13 +401,22 @@ function parseDecision(payload: unknown): SolverDecision {
   return {
     action: { ...selected.action },
     probabilities: parsedProbabilities,
+    responseChoice: answer.choice,
     model: response.model,
     inputTokens,
     outputTokens,
   };
 }
 
-export function createJevPolicy(options: JevPolicyOptions): SolverPolicy {
+interface JevRequest {
+  state: string;
+  instructions: string;
+  criteria: Readonly<Record<string, string>>;
+}
+
+function createJevRequestRunner(
+  options: JevPolicyOptions,
+): (request: JevRequest) => Promise<SolverDecision> {
   if (!Number.isSafeInteger(options.maxRequests) || options.maxRequests <= 0)
     throw new Error("Jev maxRequests must be a positive safe integer");
 
@@ -271,7 +428,7 @@ export function createJevPolicy(options: JevPolicyOptions): SolverPolicy {
   const fetchImpl = options.fetchImpl ?? fetch;
   let requests = 0;
 
-  return async (state): Promise<SolverDecision> => {
+  return async ({ state, instructions, criteria }): Promise<SolverDecision> => {
     if (requests >= options.maxRequests)
       throw new Error(`Jev request budget exhausted (${options.maxRequests})`);
     requests += 1;
@@ -289,12 +446,12 @@ export function createJevPolicy(options: JevPolicyOptions): SolverPolicy {
           },
           body: JSON.stringify({
             model,
-            state: serializeState(state),
+            state,
             questions: {
               action: {
                 type: "choice",
-                instructions: ACTION_INSTRUCTIONS,
-                criteria: actionCriteria(state),
+                instructions,
+                criteria,
               },
             },
           }),
@@ -325,5 +482,35 @@ export function createJevPolicy(options: JevPolicyOptions): SolverPolicy {
     } finally {
       clearTimeout(timeout);
     }
+  };
+}
+
+export function createJevPolicy(options: JevPolicyOptions): SolverPolicy {
+  const request = createJevRequestRunner(options);
+  return (state) =>
+    request({
+      state: serializeState(state),
+      instructions: ACTION_INSTRUCTIONS,
+      criteria: actionCriteria(state),
+    });
+}
+
+export function createCombatJevPolicy(
+  options: JevPolicyOptions,
+): CombatSolverPolicy {
+  const request = createJevRequestRunner(options);
+
+  return (state) => {
+    const timing = state.timing;
+    const instructions =
+      "Choose a synchronized combat release to preserve player survival and defeat the enemy, then prefer remaining health and currency. Swords damage the enemy, skulls damage the player, potions heal, gold gives 1 currency, diamonds give 10, and each bomb detonation deals exactly 5 damage to both combatants. " +
+      (timing === "fixed"
+        ? "Evaluate all 20 alternatives, but only placement is executed: every selected action executes with zero wait."
+        : "Choose both placement and quarter-cycle timing.");
+    return request({
+      state: serializeCombatState(state),
+      instructions,
+      criteria: combatActionCriteria(state),
+    });
   };
 }

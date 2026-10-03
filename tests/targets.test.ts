@@ -5,7 +5,8 @@ import { selectTargets } from "../src/experiments/targets";
 function coin(id: number, x: number, y: number, z: number): CoinView {
   return {
     id,
-    faction: "ally",
+    type: "gold",
+    bombHits: 0,
     position: { x, y, z },
     rotation: { x: 0, y: 0, z: 0, w: 1 },
     radius: 0.35,
