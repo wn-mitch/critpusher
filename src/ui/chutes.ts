@@ -4,6 +4,7 @@ import {
   sanitizeChutes,
   type ChuteSettings,
 } from "../chutes";
+import { MIN_COIN_DELAY_SECONDS } from "../simulation/config";
 
 const FIELDS = [
   {
@@ -26,7 +27,7 @@ const FIELDS = [
     key: "dropDelay",
     id: "drop-delay",
     label: "Delay between coins (s)",
-    min: 0.1,
+    min: MIN_COIN_DELAY_SECONDS,
     max: 0.5,
     step: 0.01,
   },

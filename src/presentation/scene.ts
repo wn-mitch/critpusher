@@ -11,7 +11,7 @@ const PUSHER_HEIGHT = 0.6;
 const PUSHER_DEPTH = 6.4;
 const PUSHER_CENTER_Y = PUSHER_HEIGHT / 2;
 const PUSHER_CENTER_Z = -2.2;
-const DEFAULT_DROP_HEIGHT = 3.5;
+const CHUTE_GEOMETRY_BASE_Y = 3.5;
 const SHELF_REAR_Z = -4;
 
 export interface CabinetScene {
@@ -336,7 +336,7 @@ export function updateChuteGuides(
       continue;
     }
     guide.visible = true;
-    guide.position.set(drop.x, dropHeight - DEFAULT_DROP_HEIGHT, 0);
+    guide.position.set(drop.x, dropHeight - CHUTE_GEOMETRY_BASE_Y, 0);
     guide.scale.x = width;
     const previews = cabinet.guideCoins[guideIndex]!;
     for (let coinIndex = 0; coinIndex < previews.length; coinIndex += 1) {
@@ -344,7 +344,7 @@ export function updateChuteGuides(
       coin.visible = coinIndex < drop.count;
       coin.position.set(
         0,
-        DEFAULT_DROP_HEIGHT + coinIndex * (thickness + 0.02),
+        CHUTE_GEOMETRY_BASE_Y + coinIndex * (thickness + 0.02),
         PLAYER_DROP_Z,
       );
       coin.scale.set(radius / width, thickness, radius);

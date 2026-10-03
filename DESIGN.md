@@ -31,6 +31,9 @@ Coins are real Rapier cylinders. Nothing is animated to imitate a pile.
 - Admission checks real cylinder shapes, including coins inserted before
   the next physics step. A blocked round spawns nothing and stops the set
   rather than retrying with fewer coins.
+- Synchronized chute releases start with downward velocity sized to clear a
+  flat coin thickness plus gap within 0.10 s. Opening rain remains gravity-only.
+  A tilted coin or a crowded pile can still physically block the slot.
 
 ## The loop
 
@@ -72,7 +75,9 @@ legible enemy chutes, and a shared adversarial pile.
 - Live physical tuning: coin weight, friction, stroke, period, drop height.
 - Next-click release settings: enemy chute count (0-4), chute spacing,
   delay between coins (0.10-0.50 s in 0.01 s steps), coins per chute per click (1-30).
-  Defaults: two enemy chutes, spacing 1.5, three coins per chute, delay 0.3 s.
+  Defaults: two enemy chutes, touching spacing 0.66, one coin per chute,
+  delay 0.3 s, 400 opening coins, drop height 3.0. Wider spacing is an explicit
+  tuning modifier; a larger coin radius raises the minimum safe spacing.
   Aim, layout, count, and delay are captured at the click; edits cannot
   change the size or placement of a set already running.
   Physical release times round up to the next 60 Hz simulation tick (about 17 ms).
@@ -91,19 +96,26 @@ legible enemy chutes, and a shared adversarial pile.
   0.5 s delay spawned three bodies at each of simulation times 0, 0.5, 1.0 s:
   nine bodies total (three ally, six enemy), not nine bodies per round.
   Mid-set control edits left that set unchanged; a new set began at 1.383 s.
+- Locked-default browser checks: opening pile spawned 400 coins (160 ally,
+  160 enemy, 80 dud). One click emitted exactly three coins at x=-0.66/0/0.66
+  and y=3.0. Six-coin-per-chute sets completed at both 0.10 and 0.15 s delays
+  with 18 emitted coins and zero losses each.
+- A dense 20-coins-per-chute stress set at 0.10 s jammed after 16 rounds.
+  A tilted enemy coin occupied the next slot; the refused round spawned nothing.
 - Browser opening mix: 100 coins at 30% enemy, 10% dud produced 60 ally,
   30 enemy, 10 dud. Values stayed pending until **Reseed pile**.
 - Moving one coin of each faction through the physical collection boundary
   increased total catches by three and each faction counter by one.
 - Desktop rendering shows gold, red, and gray coins in the opening pile.
   Portrait 390x844 has no horizontal overflow with all five HUD counters.
-- Production build and 106 regression tests pass.
+- Production build and 111 regression tests pass.
 
 Historical simultaneous-stack trials used an all-ally opening pile:
 seed 42, 600 opening coins, two enemy chutes at spacing 1.5, three coins per
 chute caught 381 ally coins (361 starting-pile, 20 player-fed) and 57 enemy
-coins. 28 of 30 release windows paid within one cycle. These are a physical
-baseline, not measurements of the mixed opening pile or timed drop sets.
+coins. 28 of 30 release windows paid within one cycle. These trials used
+gravity-only releases and are not measurements of the locked defaults,
+mixed opening pile, or downward-fed timed drop sets.
 
 Read these as provenance, not causation: the automated trial cannot prove a
 single action caused a specific payout, and most opening-pile movement is

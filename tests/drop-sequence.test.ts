@@ -54,6 +54,60 @@ describe("coin-by-coin drop sets", () => {
     }
   });
 
+  it.each([
+    { delay: 0.1, thickness: 0.13, count: 6, density: 400 },
+    { delay: 0.15, thickness: 0.13, count: 6, density: 0 },
+    { delay: 0.1, thickness: 0.3, count: 3, density: 0 },
+    { delay: 0.1, thickness: 0.4, count: 3, density: 0 },
+  ])(
+    "clears touching chutes at $delay s with thickness $thickness and $density opening coins",
+    async ({ delay, thickness, count, density }) => {
+      const simulation = await createSimulation({ density, thickness });
+      const sequence = createDropSequence();
+      const settings = sanitizeChutes(
+        { ...DEFAULT_CHUTES, dropDelay: delay, dropsPerAction: count },
+        simulation.tuning,
+      );
+      const layout = createChuteLayout(settings, simulation.tuning, 0);
+      const intervalTicks = Math.ceil(settings.dropDelay / FIXED_DT);
+      let tick = 0;
+      const releasedAt: number[] = [];
+      const release = () => {
+        if (simulation.releaseChutes(layout, 0) === null) return false;
+        releasedAt.push(tick);
+        return true;
+      };
+      try {
+        if (density > 0) {
+          for (let step = 0; step < 300; step++) simulation.step();
+        }
+        expect(simulation.stats().pendingRain).toBe(0);
+        expect(simulation.stats().spawned).toBe(density);
+        expect(sequence.start(count, intervalTicks, tick, release)).toBe(true);
+        // Clearance, not overlap permission, makes the next timed round possible.
+        expect(simulation.releaseChutes(layout, 0)).toBeNull();
+        for (tick = 1; tick <= (count - 1) * intervalTicks; tick++) {
+          simulation.step();
+          sequence.advance(tick, release);
+        }
+        expect(releasedAt).toEqual(
+          Array.from({ length: count }, (_, index) => index * intervalTicks),
+        );
+        expect(sequence.remaining).toBe(0);
+        expect(simulation.stats().spawned).toBe(
+          density + count * layout.length,
+        );
+        expect(simulation.stats().spawned).toBe(
+          simulation.stats().active +
+            simulation.stats().collected +
+            simulation.stats().lost,
+        );
+      } finally {
+        simulation.dispose();
+      }
+    },
+  );
+
   it.each([0, 4])(
     "releases the maximum click budget with %i enemy chutes",
     async (enemyChutes) => {

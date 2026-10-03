@@ -2,10 +2,11 @@ import type { Tuning } from "../contracts";
 
 export const FIXED_DT = 1 / 60;
 export const PLAYER_DROP_Z = -3.15;
+export const MIN_COIN_DELAY_SECONDS = 0.1;
 
 export const DEFAULT_TUNING: Tuning = Object.freeze({
   seed: 1337,
-  density: 300,
+  density: 400,
   openingEnemyPercent: 40,
   openingDudPercent: 20,
   radius: 0.32,
@@ -15,7 +16,7 @@ export const DEFAULT_TUNING: Tuning = Object.freeze({
   stroke: 2,
   shelfFront: 4,
   period: 2.4,
-  dropHeight: 3.5,
+  dropHeight: 3.0,
   dropRate: 6,
 }) as Tuning;
 

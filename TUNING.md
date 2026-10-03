@@ -29,8 +29,8 @@ The machine has one gold player chute and, by default, two red enemy chutes.
 One click requests a **drop set**: the selected number of single coins from
 each chute. Every round releases one coin from each chute simultaneously.
 **Delay between coins (s)** is the interval between coins within this set,
-not a delay between sets. The first round is immediate; the default is
-three coins per chute, 0.3 s apart (nine coins over three rounds).
+not a delay between sets. The first round is immediate. Defaults: one coin
+per chute (three coins per click), touching spacing 0.66, delay 0.3 s.
 
 **Release chutes** settings apply to the next click without reseeding:
 
@@ -48,6 +48,12 @@ a set is refused. Fixed simulation ticks prevent catch-up bursts after
 stalls. Pause, reset, hiding the page, or blocked physical admission stops
 the remaining coins. There is no additional delay before the next set.
 Admission includes newly inserted colliders that Rapier has not yet indexed.
+
+Synchronized releases begin with downward chute exit velocity:
+`-(coin thickness + 0.02) / 0.10` along y. A fresh flat coin clears the
+slot before the shortest selectable interval, while collision preflight
+remains active. Rain and the headless single-coin `drop` path start at rest.
+A tilted coin or a piled-up slot can still block and cancel a set.
 
 Opening rain defaults to 40% ally (gold), 40% enemy (red), 20% dud (gray).
 **Opening enemy coins (%)** and **Opening dud coins (%)** apply on reseed;
@@ -76,12 +82,20 @@ just solve --policies center --patterns flanks --coins 3 --enemy-coins 3 \
 
 ## Current physical defaults
 
-300 starting coins, seed 1337, 40% ally / 40% enemy / 20% dud, radius 0.32,
+400 starting coins, seed 1337, 40% ally / 40% enemy / 20% dud, radius 0.32,
 thickness 0.13, friction 0.58, pusher stroke 2, collection edge z=4,
-period 2.4 seconds, drop height 3.5. Rapier steps at 60 Hz. Browser cadence
+period 2.4 seconds, drop height 3.0. Rapier steps at 60 Hz. Browser cadence
 comes from delay between coins; headless stack trials retain their own
 drop-rate limit (six releases per second by default). Coin faces are flat
 cylinders; embossed rendering adds only 0.008 total thickness.
+
+Browser smoke: all 400 opening coins spawned with exact 160/160/80 faction
+quotas and zero losses. A default click spawned one coin at each of
+x=-0.66/0/0.66, y=3.0, z=-3.15. Six-round sets at 0.10 s and 0.15 s intervals
+both emitted 18 bodies without losing coins. A 20-round dense set at 0.10 s
+jammed at round 17 when a tilted enemy coin occupied the slot; no partial
+round spawned. Historical stack trials below used gravity-only releases,
+so their payout results are not measurements of the locked defaults.
 
 **Coin weight (×)** is a live mass multiplier from 0.1 to 10, default 1.
 It scales cylinder material density, so mass still depends on coin size.

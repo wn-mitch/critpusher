@@ -115,14 +115,15 @@ export class RapierWorld {
   }
 
   /** Add a dynamic, full-rotation cylinder. Duplicate ids are rejected. */
-  addCylinder(id: number, pose: CoinPose): boolean {
+  addCylinder(id: number, pose: CoinPose, verticalVelocity = 0): boolean {
     if (this.disposed || this.coins.has(id)) return false;
     if (
       !isFiniteVec3(pose.position) ||
       !Number.isFinite(pose.radius) ||
       !Number.isFinite(pose.thickness) ||
       pose.radius <= 0 ||
-      pose.thickness <= 0
+      pose.thickness <= 0 ||
+      !Number.isFinite(verticalVelocity)
     )
       return false;
 
@@ -131,6 +132,7 @@ export class RapierWorld {
       .setCcdEnabled(true)
       .setCanSleep(true);
     bodyDesc.setRotation(normalizeRotation(pose.rotation));
+    if (verticalVelocity !== 0) bodyDesc.setLinvel(0, verticalVelocity, 0);
     const body = this.world.createRigidBody(bodyDesc);
     const colliderDesc = RAPIER.ColliderDesc.cylinder(
       pose.thickness / 2,

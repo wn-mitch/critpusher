@@ -30,7 +30,7 @@ For a phone on the same network, bind explicitly:
 - One click requests a **drop set**: N coins from each chute, one coin at a
   time with the selected delay between them. Every round releases one gold
   player coin and one red coin from each enemy chute. The delay is within
-  the set, not between clicks. Defaults: three coins per chute, 0.3 s delay.
+  the set, not between clicks. Defaults: one coin per chute, 0.3 s delay.
 - The opening pile mixes gold allies, red enemies, and gray duds (40/40/20%
   by default). Duds affect the physics but count for neither side.
 - The HUD separates **Ally caught**, **Enemy caught**, and **Duds caught**.
@@ -40,6 +40,11 @@ Open **Tuning** for enemy chute count (0-4), chute spacing, delay between
 coins, and coins per chute per click (1-30). Each click captures its aim and
 settings. Pause, reset, or a blocked chute cancels queued coins.
 Opening enemy/dud percentages apply with **Reseed pile**; ally is the remainder.
+
+Locked machine defaults: 400 opening coins, drop height 3.0, two enemy
+chutes touching the player chute at spacing 0.66. Wider spacing is a tuning
+modifier. Chute releases have downward exit velocity to clear fresh coins
+at 0.10 s intervals; genuinely occupied slots still cancel a set.
 
 Audio arms on the first gesture. Mute, volume, and reduced motion are
 independent; reduced motion suppresses payout particles without changing

@@ -1,4 +1,5 @@
 import type { CoinFaction, Tuning } from "./contracts";
+import { MIN_COIN_DELAY_SECONDS } from "./simulation/config";
 
 export interface ChuteSettings {
   enemyChutes: number;
@@ -15,9 +16,9 @@ export interface ChuteDrop {
 
 export const DEFAULT_CHUTES: Readonly<ChuteSettings> = Object.freeze({
   enemyChutes: 2,
-  chuteSpacing: 1.5,
+  chuteSpacing: 0.66,
   dropDelay: 0.3,
-  dropsPerAction: 3,
+  dropsPerAction: 1,
 });
 
 function bounded(
@@ -54,7 +55,12 @@ export function sanitizeChutes(
       limits.max,
       DEFAULT_CHUTES.chuteSpacing,
     ),
-    dropDelay: bounded(settings.dropDelay, 0.1, 0.5, DEFAULT_CHUTES.dropDelay),
+    dropDelay: bounded(
+      settings.dropDelay,
+      MIN_COIN_DELAY_SECONDS,
+      0.5,
+      DEFAULT_CHUTES.dropDelay,
+    ),
     dropsPerAction: Math.round(
       bounded(settings.dropsPerAction, 1, 30, DEFAULT_CHUTES.dropsPerAction),
     ),

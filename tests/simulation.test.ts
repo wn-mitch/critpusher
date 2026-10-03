@@ -213,7 +213,7 @@ describe("physical simulation lifecycle", () => {
     simulation.dispose();
   });
 
-  it.each([150, 300, 500, 1_000])(
+  it.each([150, 300, 400, 500, 1_000])(
     "keeps a %i-coin starting rain conserved and finite",
     async (density) => {
       const simulation = await simulationWith({ density, seed: 7 });

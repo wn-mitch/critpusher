@@ -8,7 +8,6 @@ import { createCabinet, updateChuteGuides } from "./scene";
 
 const MIN_CHUTE_X = -4.4;
 const MAX_CHUTE_X = 4.4;
-const DEFAULT_DROP_HEIGHT = 3.5;
 
 function clampChute(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -60,7 +59,7 @@ export function createPresentation(host: HTMLElement): Presentation {
     typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(() => resize())
       : null;
-  let dropHeight = DEFAULT_DROP_HEIGHT;
+  let dropHeight = DEFAULT_TUNING.dropHeight;
   let disposed = false;
 
   function disposeCabinet(): void {
@@ -153,7 +152,7 @@ export function createPresentation(host: HTMLElement): Presentation {
     }
     dropHeight = Number.isFinite(simulation.tuning.dropHeight)
       ? simulation.tuning.dropHeight
-      : DEFAULT_DROP_HEIGHT;
+      : DEFAULT_TUNING.dropHeight;
     updateChuteGuides(
       cabinet,
       chutes,

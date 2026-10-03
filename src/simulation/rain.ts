@@ -193,7 +193,12 @@ export function planRain(tuning: Tuning): RainDrop[] {
   const radius = bounded(tuning.radius, 0.05, 0.75, 0.32);
   const thickness = bounded(tuning.thickness, 0.02, 0.4, 0.13);
   const shelfFront = bounded(tuning.shelfFront, 2.5, 4, 4);
-  const dropHeight = bounded(tuning.dropHeight, 1.5, 8, 3.5);
+  const dropHeight = bounded(
+    tuning.dropHeight,
+    1.5,
+    8,
+    DEFAULT_TUNING.dropHeight,
+  );
   const random = randomFactory(
     Number.isFinite(tuning.seed) ? Math.trunc(tuning.seed) : 0,
   );

@@ -12,6 +12,7 @@ import type {
 import {
   DEFAULT_TUNING,
   FIXED_DT,
+  MIN_COIN_DELAY_SECONDS,
   PLAYER_DROP_Z,
   sanitizeDropX,
   sanitizeTuning,
@@ -161,6 +162,9 @@ class PusherSimulation implements Simulation {
     )
       return null;
 
+    // Chute feed clears a thickness plus gap within the shortest selectable delay.
+    const exitVelocityY =
+      -(this.tuning.thickness + SPAWN_GAP) / MIN_COIN_DELAY_SECONDS;
     const ids: number[] = [];
     for (const pose of poses) {
       const coin = this.lifecycle.spawn(
@@ -170,7 +174,7 @@ class PusherSimulation implements Simulation {
         this.tuning.thickness,
         pose.faction,
       );
-      if (!this.world.addCylinder(coin.id, coin))
+      if (!this.world.addCylinder(coin.id, coin, exitVelocityY))
         throw new Error("preflighted chute release could not be spawned");
       ids.push(coin.id);
     }

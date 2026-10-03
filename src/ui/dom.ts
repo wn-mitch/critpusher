@@ -339,7 +339,7 @@ export function createAppUi(
   presetLabel.textContent = "Density presets";
   presetGroup.append(presetLabel);
   const densityPresets: HTMLButtonElement[] = [];
-  for (const density of [150, 300, 500, 1000]) {
+  for (const density of [150, 300, 400, 500, 1000]) {
     const preset = button(
       `density-${density}`,
       String(density),

@@ -64,6 +64,7 @@ export interface Simulation {
    * Atomically release one to five vertical chute stacks of one to three coins.
    * Returned ids follow input chute order, then bottom-to-top order.
    * A nonnegative integer minimumIntervalTicks overrides the drop-rate cooldown.
+   * Releases start with downward exit velocity; occupied slots still reject atomically.
    */
   releaseChutes(
     chutes: readonly { x: number; count: number; faction?: CoinFaction }[],
